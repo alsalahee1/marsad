@@ -9,7 +9,7 @@ their enforcement.
 ```
 packages/shared   domain contracts (zod schemas, RunStatus, BlastRadius, Event union, SSE envelope)
 apps/engine       Express 5 API, MySQL event log, BullMQ worker, tool registry + executor
-apps/desk         React + Vite desk (next session; only the theme exists today)
+apps/desk         React + Vite + Tailwind v4 desk: auth gate, shell, live event log
 docker/           MySQL init SQL (both DB accounts)
 ```
 
@@ -25,7 +25,7 @@ pnpm --filter @marsad/engine hash-password   # prints OPERATOR_PASSWORD_HASH for
 
 docker compose up -d mysql redis   # or point .env at your own MySQL 8 + Redis 7
 pnpm db:migrate                    # schema, triggers, and the app user's table grants
-pnpm dev                           # engine on http://127.0.0.1:8080 (+ shared in watch mode)
+pnpm dev                           # engine on :8080, desk on http://localhost:5173, shared in watch mode
 ```
 
 Checks, all from the root: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`.
@@ -116,6 +116,7 @@ Runs that were halted stay halted (terminal); re-create them when ready.
 | `GET /auth/session`, `POST /auth/logout`                                    | session | session status / clear cookie                      |
 | `GET /system`, `POST /halt`, `POST /resume`                                 | session | global halt                                        |
 | `GET /events?after=&limit=&runId=`                                          | session | event rows after a cursor                          |
+| `GET /events/tail?before=&limit=&runId=`                                    | session | newest rows, ascending; the desk's first page      |
 | `GET /events/stream`                                                        | session | SSE; `Last-Event-ID` (or `?lastEventId=`) replays  |
 | `GET/POST /agents`                                                          | session | agents                                             |
 | `GET/POST /runs`, `GET /runs/:id`                                           | session | runs; POST enqueues                                |
@@ -125,6 +126,57 @@ Runs that were halted stay halted (terminal); re-create them when ready.
 The session is an httpOnly, `SameSite=Strict`, secure-in-production cookie signed with
 `SESSION_SECRET` (stateless HMAC; rotating the secret logs everyone out). Errors are
 `{ error: { code, message, issues? } }`. No response and no log line ever carries a credential.
+
+## Desk
+
+`apps/desk` is the control room: React 19 + Vite 8 + Tailwind v4, TypeScript strict with
+`moduleResolution: bundler`, consuming `@marsad/shared` from source (a Vite alias plus matching
+tsconfig `paths`, so the desk never waits on a `tsc -b` of the shared package). It is wired into
+the root `dev`, `build`, `typecheck`, `lint` and `test` scripts.
+
+What exists today:
+
+- **Auth gate.** `GET /auth/session` on load; `POST /auth/login` with the password; every fetch
+  with `credentials: 'include'`. A 401 from any later request, or the session's own expiry,
+  drops back to the login form. The desk holds no secret and never reads the cookie.
+- **Shell** per CLAUDE.md §5. Desktop: icon rail (56px, expands to 240px) and a 12-column panel
+  grid; wide (1440+): plus a 380px inspector; tablet: icon-only rail and list-detail views;
+  fold: single column under a top nav; phone: bottom tab bar with exactly Desk, Agents,
+  Approvals, Log and Settings, plus a sticky "Halt all" (`POST /halt`) in the thumb zone with
+  safe-area insets and 44px targets. "Halt all" is one tap from every layout; once halted the
+  same control reads "Resume" (`POST /resume`).
+- **Event log.** First page from `GET /events/tail`, then one `EventSource` on
+  `/events/stream?lastEventId=<last id>` with `withCredentials`. Every frame goes through
+  `EventSchema`; a frame that fails is dropped and counted, never rendered with a guessed
+  shape. The list is virtualised (fixed-height rows), has a follow-tail toggle, and pages history
+  backwards with `?before=`. The browser's own retries send `Last-Event-ID`; when it gives up the
+  desk checks the session and reopens from the last id it holds, with exponential backoff.
+- The global-halt flag on screen is a projection of `system.halted` / `system.resumed` rows;
+  `GET /system` only fills the gap when no such row is inside the buffer's window.
+
+Theme: `marsad-theme.css` is imported right after `@import "tailwindcss"`; the desk's own layer
+(`desk.css`) uses its tokens only — no hex anywhere. All numbers render in the tabular mono
+face. The 600ms flash on a changed value is the only non-user-triggered motion, and
+`prefers-reduced-motion` collapses it.
+
+### Desk configuration
+
+One build-time variable, `VITE_API_BASE` (see `apps/desk/.env.example`): where the engine is.
+Defaults to `http://localhost:8080` in `pnpm dev` and to `/api` in a production build.
+
+Two constraints follow from the session cookie being `SameSite=Strict`:
+
+- In development the desk and the engine must be _same-site_: open the desk at
+  `http://localhost:5173` and point it at `http://localhost:8080`, never at `127.0.0.1` (a
+  different site — the cookie would not be sent). `CORS_ORIGINS` in `.env` must list the exact
+  Vite origin; Vite is pinned to port 5173 with `strictPort` so that origin cannot drift.
+- In production serve the built `apps/desk/dist` from Nginx and proxy `/api/` to the engine on
+  the same origin, stripping the prefix (`location /api/ { proxy_pass http://127.0.0.1:8080/; }`
+  with `proxy_buffering off` for `/api/events/stream`), and `try_files $uri /index.html` for the
+  SPA routes. Set the usual headers there (`Content-Security-Policy`, `frame-ancestors 'none'`).
+
+Not in this slice: the agent roster, the approval queue, budgets, the command palette, and the
+agent loop itself. Those views are routed stubs; everything they need is already in the stream.
 
 ## Docker
 

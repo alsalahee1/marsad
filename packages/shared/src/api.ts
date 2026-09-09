@@ -44,6 +44,13 @@ export const ListEventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(200),
 });
 
+/** `GET /events/tail`: the newest rows, paged backwards with `before`. */
+export const TailEventsQuerySchema = z.object({
+  before: z.string().regex(/^\d+$/).optional(),
+  runId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+
 /** Every error response has this shape. `issues` is present only for validation failures. */
 export const ApiErrorSchema = z.object({
   error: z.object({

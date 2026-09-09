@@ -30,6 +30,12 @@ export interface EventStore {
   insert(input: EventInput, at: Date): Promise<Event>;
   /** Rows with id > afterId, ascending, at most `limit`. */
   listAfter(afterId: string | null, limit: number, runId?: string): Promise<Event[]>;
+  /**
+   * The newest `limit` rows (with id < beforeId when given), still ascending. The desk opens on
+   * this: `listAfter(null)` starts at the beginning of history, which is never what a live desk
+   * wants to see first.
+   */
+  listBefore(beforeId: string | null, limit: number, runId?: string): Promise<Event[]>;
 }
 
 export interface NewRun {

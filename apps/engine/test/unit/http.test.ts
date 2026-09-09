@@ -270,6 +270,25 @@ describe('events', () => {
     expect(body.events.map((e) => e.payload.by)).toEqual(['b']);
   });
 
+  it('GET /events/tail returns the newest rows ascending and pages backwards with before', async () => {
+    const ids: string[] = [];
+    for (const by of ['a', 'b', 'c', 'd']) {
+      ids.push((await h.bus.insertEvent({ type: 'system.resumed', payload: { by } })).id);
+    }
+    const headers = { Cookie: cookie };
+    const tail = (await (await fetch(`${baseUrl}/events/tail?limit=2`, { headers })).json()) as {
+      events: { id: string; payload: { by: string } }[];
+    };
+    expect(tail.events.map((e) => e.payload.by)).toEqual(['c', 'd']);
+    const earlier = (await (
+      await fetch(`${baseUrl}/events/tail?limit=2&before=${ids[2]}`, { headers })
+    ).json()) as { events: { id: string }[] };
+    expect(earlier.events.map((e) => e.id)).toEqual([ids[0], ids[1]]);
+    const bad = await fetch(`${baseUrl}/events/tail?before=abc`, { headers });
+    expect(bad.status).toBe(400);
+    expect((await request(server).get('/events/tail')).status).toBe(401);
+  });
+
   it('streams with SSE headers, replays after Last-Event-ID, then goes live without gaps or duplicates', async () => {
     const first = await h.bus.insertEvent({ type: 'system.resumed', payload: { by: 'one' } });
     const second = await h.bus.insertEvent({ type: 'system.resumed', payload: { by: 'two' } });

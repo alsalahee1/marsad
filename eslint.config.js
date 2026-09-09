@@ -2,6 +2,8 @@
 // with Prettier handling formatting. Each workspace package inherits this file.
 import eslint from '@eslint/js';
 import prettier from 'eslint-config-prettier';
+import reactHooks from 'eslint-plugin-react-hooks';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -14,7 +16,11 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        project: ['./packages/shared/tsconfig.test.json', './apps/engine/tsconfig.test.json'],
+        project: [
+          './packages/shared/tsconfig.test.json',
+          './apps/engine/tsconfig.test.json',
+          './apps/desk/tsconfig.test.json',
+        ],
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -42,8 +48,19 @@ export default tseslint.config(
     },
   },
   {
+    // Desk: browser code. React hooks rules (including the compiler-backed ones) are errors.
+    files: ['apps/desk/**/*.{ts,tsx}'],
+    ...reactHooks.configs.flat.recommended,
+    languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    // Desk build and test config runs under Node.
+    files: ['apps/desk/*.config.ts', 'apps/desk/test/**/*.{ts,tsx}'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+  },
+  {
     // Tests: fakes implement async ports without awaiting, and supertest bodies are `any`.
-    files: ['**/test/**/*.ts'],
+    files: ['**/test/**/*.{ts,tsx}'],
     rules: {
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',

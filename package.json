@@ -2,7 +2,7 @@
   "name": "marsad",
   "version": "0.1.0",
   "private": true,
-  "description": "MARSAD — agent operations desk. pnpm workspace: apps/* and packages/*.",
+  "description": "MARSAD \u2014 agent operations desk. pnpm workspace: apps/* and packages/*.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -23,6 +23,8 @@
     "@eslint/js": "10.0.1",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.12.0",
     "prettier": "3.9.6",
     "typescript": "5.9.3",
     "typescript-eslint": "8.70.0"
