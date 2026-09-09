@@ -50,5 +50,26 @@ export function mysqlEventStore(pool: Pool): EventStore {
       );
       return rows.map(toEvent);
     },
+
+    async listBefore(beforeId, limit, runId) {
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (beforeId !== null) {
+        where.push('id < ?');
+        params.push(beforeId);
+      }
+      if (runId !== undefined) {
+        where.push('run_id = ?');
+        params.push(runId);
+      }
+      params.push(limit);
+      const [rows] = await pool.query<Row[]>(
+        `SELECT id, type, run_id, payload, at FROM events
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY id DESC LIMIT ?`,
+        params,
+      );
+      return rows.map(toEvent).reverse();
+    },
   };
 }

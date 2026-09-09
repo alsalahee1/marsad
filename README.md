@@ -116,6 +116,7 @@ Runs that were halted stay halted (terminal); re-create them when ready.
 | `GET /auth/session`, `POST /auth/logout`                                    | session | session status / clear cookie                      |
 | `GET /system`, `POST /halt`, `POST /resume`                                 | session | global halt                                        |
 | `GET /events?after=&limit=&runId=`                                          | session | event rows after a cursor                          |
+| `GET /events/tail?before=&limit=&runId=`                                    | session | newest rows, ascending; the desk's first page      |
 | `GET /events/stream`                                                        | session | SSE; `Last-Event-ID` (or `?lastEventId=`) replays  |
 | `GET/POST /agents`                                                          | session | agents                                             |
 | `GET/POST /runs`, `GET /runs/:id`                                           | session | runs; POST enqueues                                |

@@ -6,6 +6,7 @@ import {
   ListEventsQuerySchema,
   ListRunsQuerySchema,
   LoginRequestSchema,
+  TailEventsQuerySchema,
 } from '@marsad/shared';
 import { verify as verifyArgon2 } from 'argon2';
 import { stringifySetCookie } from 'cookie';
@@ -119,6 +120,13 @@ export function protectedRoutes(deps: AppDeps): Router {
   r.get('/events', async (req, res) => {
     const q = parseOrThrow(ListEventsQuerySchema, req.query);
     const events = await deps.store.events.listAfter(q.after ?? null, q.limit, q.runId);
+    res.json({ events });
+  });
+  // The desk's first page: newest rows, ascending, so `?lastEventId=` on the stream continues
+  // exactly where this left off. Older history is `?before=<first id>`.
+  r.get('/events/tail', async (req, res) => {
+    const q = parseOrThrow(TailEventsQuerySchema, req.query);
+    const events = await deps.store.events.listBefore(q.before ?? null, q.limit, q.runId);
     res.json({ events });
   });
   r.get('/events/stream', (req, res) =>

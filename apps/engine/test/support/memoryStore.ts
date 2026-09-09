@@ -82,6 +82,14 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
           .filter((e) => BigInt(e.id) > after && (runId === undefined || e.runId === runId))
           .slice(0, limit);
       },
+      async listBefore(beforeId, limit, runId) {
+        const matching = events.filter(
+          (e) =>
+            (beforeId === null || BigInt(e.id) < BigInt(beforeId)) &&
+            (runId === undefined || e.runId === runId),
+        );
+        return matching.slice(Math.max(0, matching.length - limit));
+      },
     },
 
     runs: {

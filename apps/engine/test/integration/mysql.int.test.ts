@@ -206,6 +206,20 @@ describe.runIf(enabled)('mysql integration', () => {
       expect(after.map((e) => e.id)).toEqual([b.id]);
       expect(after[0]?.at).toMatch(/Z$/);
     });
+
+    it('listBefore returns the newest rows ascending and pages backwards', async () => {
+      const ids: string[] = [];
+      for (const by of ['a', 'b', 'c']) {
+        ids.push(
+          (await store.events.insert({ type: 'system.resumed', payload: { by } }, new Date())).id,
+        );
+      }
+      expect((await store.events.listBefore(null, 2)).map((e) => e.id)).toEqual([ids[1], ids[2]]);
+      expect((await store.events.listBefore(ids[2] ?? null, 5)).map((e) => e.id)).toEqual([
+        ids[0],
+        ids[1],
+      ]);
+    });
   });
 
   describe('tool_calls idempotency', () => {
