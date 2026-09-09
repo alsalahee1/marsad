@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+*.tsbuildinfo
+# Hand-aligned design tokens; prettier would destroy the column alignment.
+apps/desk/src/styles/marsad-theme.css
+# Project instructions are hand-formatted; never touched by tooling.
+CLAUDE.md
