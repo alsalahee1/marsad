@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10 refuses to run dependency build scripts unless they are listed here.
+onlyBuiltDependencies:
+  - argon2
+  - esbuild
