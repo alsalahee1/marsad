@@ -1,0 +1,35 @@
+# --- secrets: commit one of these once and it is public forever ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+secrets/
+credentials.json
+**/wallet*.json
+
+# --- dependencies ---
+node_modules/
+.pnpm-store/
+
+# --- build output ---
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# --- runtime / local data ---
+logs/
+*.log
+data/
+dump.rdb
+.docker-data/
+
+# --- tooling ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+coverage/
+.turbo/

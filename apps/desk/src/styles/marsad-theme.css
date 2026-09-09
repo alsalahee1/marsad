@@ -1,0 +1,255 @@
+/* ============================================================
+   MARSAD — Agent Operations Desk
+   Design system foundation / v0.1
+   Tailwind v4 theme layer. Import once, after `@import "tailwindcss";`
+
+   Two colour axes, deliberately separated:
+     1. RUN STATE   -> hue   (what the agent is doing right now)
+     2. BLAST RADIUS-> structure (how reversible its next action is)
+   Risk is never encoded as "another colour". It is encoded as a
+   stripe, because colour is already fully spent on run state.
+   ============================================================ */
+
+@theme {
+  /* ---------- Typography ---------- */
+  --font-ui: "Instrument Sans", "IBM Plex Sans Arabic", system-ui, sans-serif;
+  --font-ar: "IBM Plex Sans Arabic", "Instrument Sans", system-ui, sans-serif;
+  --font-num: "Commit Mono", "Geist Mono", ui-monospace, monospace;
+
+  /* Compact scale. Base is 14px, not 16 — this is an instrument
+     panel, not a reading surface. Nothing below 11px ever ships. */
+  --text-2xs: 0.6875rem;  --text-2xs--line-height: 0.9375rem;
+  --text-xs:  0.75rem;    --text-xs--line-height:  1rem;
+  --text-sm:  0.8125rem;  --text-sm--line-height:  1.125rem;
+  --text-base:0.875rem;   --text-base--line-height:1.25rem;
+  --text-md:  1rem;       --text-md--line-height:  1.5rem;
+  --text-lg:  1.25rem;    --text-lg--line-height:  1.625rem;
+  --text-xl:  1.625rem;   --text-xl--line-height:  2rem;
+  --text-2xl: 2.125rem;   --text-2xl--line-height: 2.5rem;
+
+  --tracking-label: 0.01em;   /* labels stay sentence case */
+  --tracking-chip: 0.06em;    /* uppercase allowed ONLY on state chips */
+
+  /* ---------- Spacing (4px base, 2 and 6 kept for hairline work) --- */
+  --spacing-0_5: 2px;  --spacing-1: 4px;   --spacing-1_5: 6px;
+  --spacing-2: 8px;    --spacing-3: 12px;  --spacing-4: 16px;
+  --spacing-5: 20px;   --spacing-6: 24px;  --spacing-8: 32px;
+  --spacing-10: 40px;  --spacing-14: 56px; --spacing-18: 72px;
+
+  /* ---------- Radius — small. Panels are instruments, not cards ---- */
+  --radius-xs: 3px;   /* chips, inline tags        */
+  --radius-sm: 5px;   /* inputs, small buttons     */
+  --radius-md: 8px;   /* controls, menu items      */
+  --radius-lg: 12px;  /* panels                    */
+  --radius-xl: 16px;  /* sheets, modals            */
+
+  /* ---------- Layout ---------- */
+  --rail-collapsed: 56px;
+  --rail-expanded: 240px;
+  --inspector-w: 380px;
+  --panel-gap: 12px;
+  --tap-min: 44px;
+  --row-comfortable: 40px;
+  --row-compact: 28px;
+
+  --breakpoint-fold: 600px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-desktop: 1024px;
+  --breakpoint-wide: 1440px;
+
+  /* ---------- Motion ---------- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --dur-flash: 600ms;   /* changed-value highlight, the only ambient motion */
+}
+
+/* ============================================================
+   LIGHT — default
+   ============================================================ */
+:root {
+  --surface-canvas:  oklch(98.4% 0.003 260);
+  --surface-panel:   oklch(100%  0     0);
+  --surface-sunken:  oklch(96.5% 0.004 260);
+  --surface-hover:   oklch(96%   0.006 265);
+  --surface-selected:oklch(95%   0.028 268);
+
+  --line-hairline:   oklch(91.5% 0.006 260);
+  --line-strong:     oklch(83%   0.008 260);
+
+  --ink-primary:     oklch(24%   0.012 265);
+  --ink-secondary:   oklch(48%   0.010 265);
+  --ink-muted:       oklch(63%   0.008 265);
+  --ink-inverse:     oklch(99%   0.002 265);
+
+  /* Single interactive accent. Also doubles as "running",
+     because active and running are the same idea to the eye. */
+  --accent:          oklch(48%   0.170 268);
+  --accent-hover:    oklch(42%   0.170 268);
+  --accent-subtle:   oklch(95%   0.030 268);
+
+  /* Axis 1 — run state */
+  --state-queued:    oklch(63%   0.008 265);
+  --state-running:   var(--accent);
+  --state-blocked:   oklch(72%   0.160 68);   /* waiting on your approval */
+  --state-done:      oklch(56%   0.130 158);
+  --state-failed:    oklch(55%   0.200 25);
+  --state-halted:    oklch(45%   0.100 310);
+
+  /* Axis 2 — blast radius. Stripe colour only; never a fill. */
+  --risk-reversible:   transparent;
+  --risk-costly:       oklch(72% 0.160 68);
+  --risk-irreversible: oklch(55% 0.200 25);
+  --risk-stripe-w: 3px;
+
+  /* Budget */
+  --budget-ok:     var(--state-done);
+  --budget-warn:   oklch(72% 0.160 68);
+  --budget-breach: oklch(55% 0.200 25);
+
+  /* Series — equal lightness so no line reads as "more important" */
+  --series-1: oklch(55% 0.150 268);
+  --series-2: oklch(55% 0.130 200);
+  --series-3: oklch(55% 0.140 158);
+  --series-4: oklch(58% 0.140 75);
+  --series-5: oklch(55% 0.180 25);
+  --series-6: oklch(52% 0.140 320);
+
+  /* Elevation — borders first. A panel that does not float has no
+     shadow. Shadow means "this is above the desk", nothing else. */
+  --elev-0: none;
+  --elev-1: 0 1px 2px oklch(0% 0 0 / 0.06);
+  --elev-2: 0 4px 12px -2px oklch(0% 0 0 / 0.10);
+  --elev-3: 0 16px 40px -8px oklch(0% 0 0 / 0.18);
+  --focus-ring: 0 0 0 2px var(--surface-panel), 0 0 0 4px var(--accent);
+}
+
+/* ============================================================
+   DARK — cool near-black, not neutral #111
+   ============================================================ */
+[data-theme="dark"] {
+  --surface-canvas:  oklch(17%   0.008 265);
+  --surface-panel:   oklch(20.5% 0.009 265);
+  --surface-sunken:  oklch(14.5% 0.008 265);
+  --surface-hover:   oklch(24%   0.010 265);
+  --surface-selected:oklch(28%   0.045 268);
+
+  --line-hairline:   oklch(28%   0.010 265);
+  --line-strong:     oklch(38%   0.012 265);
+
+  --ink-primary:     oklch(95%   0.004 265);
+  --ink-secondary:   oklch(75%   0.008 265);
+  --ink-muted:       oklch(58%   0.008 265);
+  --ink-inverse:     oklch(17%   0.008 265);
+
+  --accent:          oklch(68%   0.150 268);
+  --accent-hover:    oklch(74%   0.150 268);
+  --accent-subtle:   oklch(28%   0.055 268);
+
+  --state-queued:    oklch(58%   0.008 265);
+  --state-running:   var(--accent);
+  --state-blocked:   oklch(78%   0.140 68);
+  --state-done:      oklch(70%   0.140 158);
+  --state-failed:    oklch(68%   0.180 25);
+  --state-halted:    oklch(65%   0.110 310);
+
+  --risk-costly:       oklch(78% 0.140 68);
+  --risk-irreversible: oklch(68% 0.180 25);
+
+  --budget-ok:     var(--state-done);
+  --budget-warn:   oklch(78% 0.140 68);
+  --budget-breach: oklch(68% 0.180 25);
+
+  --series-1: oklch(70% 0.140 268);
+  --series-2: oklch(70% 0.120 200);
+  --series-3: oklch(70% 0.130 158);
+  --series-4: oklch(76% 0.130 75);
+  --series-5: oklch(70% 0.160 25);
+  --series-6: oklch(68% 0.130 320);
+
+  --elev-1: 0 1px 2px oklch(0% 0 0 / 0.40);
+  --elev-2: 0 4px 12px -2px oklch(0% 0 0 / 0.50);
+  --elev-3: 0 16px 40px -8px oklch(0% 0 0 / 0.65);
+}
+
+/* ============================================================
+   Base rules that the whole desk depends on
+   ============================================================ */
+html { color-scheme: light dark; }
+
+body {
+  background: var(--surface-canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+html[dir="rtl"] body { font-family: var(--font-ar); }
+
+/* Every number on this desk is tabular. Live values must not
+   shift the layout when they change — that is the single most
+   important rule in a real-time panel. */
+.num, table td, table th, time, [data-numeric] {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Uppercase is permitted on state chips only, because there the
+   caps carry meaning: it marks machine state, not human text. */
+.chip-state {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-chip);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  border-radius: var(--radius-xs);
+}
+
+/* Blast radius. Structural, not chromatic. */
+.action--reversible   { border-inline-start: var(--risk-stripe-w) solid var(--risk-reversible); }
+.action--costly       { border-inline-start: var(--risk-stripe-w) solid var(--risk-costly); }
+.action--irreversible { border-inline-start: var(--risk-stripe-w) solid var(--risk-irreversible); }
+
+.panel {
+  background: var(--surface-panel);
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-0);
+}
+
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Changed-value flash: the only motion not triggered by the user. */
+@keyframes value-flash {
+  from { background: var(--accent-subtle); }
+  to   { background: transparent; }
+}
+[data-changed="true"] { animation: value-flash var(--dur-flash) var(--ease-standard); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* Touch floor + safe areas (phone shell) */
+@media (max-width: 599px) {
+  button, a[role="button"], [role="tab"], .tap {
+    min-block-size: var(--tap-min);
+    min-inline-size: var(--tap-min);
+  }
+  .app-shell {
+    padding-block-start: env(safe-area-inset-top);
+    padding-block-end: calc(env(safe-area-inset-bottom) + var(--spacing-2));
+  }
+  /* Density drops on phone: comfortable rows only, never compact. */
+  :root { --row-active: var(--row-comfortable); }
+}
+
+@media (min-width: 600px) {
+  :root { --row-active: var(--row-compact); }
+}
