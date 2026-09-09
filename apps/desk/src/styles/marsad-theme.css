@@ -70,6 +70,7 @@
    LIGHT — default
    ============================================================ */
 :root {
+  color-scheme: light;
   --surface-canvas:  oklch(98.4% 0.003 260);
   --surface-panel:   oklch(100%  0     0);
   --surface-sunken:  oklch(96.5% 0.004 260);
@@ -130,6 +131,7 @@
    DARK — cool near-black, not neutral #111
    ============================================================ */
 [data-theme="dark"] {
+  color-scheme: dark;
   --surface-canvas:  oklch(17%   0.008 265);
   --surface-panel:   oklch(20.5% 0.009 265);
   --surface-sunken:  oklch(14.5% 0.008 265);
@@ -177,7 +179,6 @@
 /* ============================================================
    Base rules that the whole desk depends on
    ============================================================ */
-html { color-scheme: light dark; }
 
 body {
   background: var(--surface-canvas);

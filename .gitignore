@@ -22,7 +22,7 @@ build/
 # --- runtime / local data ---
 logs/
 *.log
-data/
+/data/
 dump.rdb
 .docker-data/
 
