@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.git
+.env
+.env.*
+!.env.example
+docker/
+.docker-data/
+apps/desk
