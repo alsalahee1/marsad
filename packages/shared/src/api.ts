@@ -201,6 +201,18 @@ export const BudgetTodayResponseSchema = z.object({
 });
 export type BudgetTodayResponse = z.infer<typeof BudgetTodayResponseSchema>;
 
+/** `GET /limits`: the ceilings and caps the engine enforces, so the desk can draw meters. */
+export const LimitsResponseSchema = z.object({
+  maxSteps: z.int().positive(),
+  maxTokens: z.int().positive(),
+  maxWallClockMs: z.int().positive(),
+  perRunUsd: z.number().positive(),
+  perDayUsd: z.number().positive(),
+  perDayCalls: z.int().positive(),
+  approvalTokenTtlMs: z.int().positive(),
+});
+export type LimitsResponse = z.infer<typeof LimitsResponseSchema>;
+
 export const ToolsResponseSchema = z.object({
   tools: z.array(ToolDefinitionSchema.extend({ active: z.boolean() })),
 });

@@ -10,21 +10,27 @@ import {
 
 export type ThemePref = 'system' | 'light' | 'dark';
 export type DensityPref = 'comfortable' | 'compact';
+export type DirPref = 'ltr' | 'rtl';
 
 export interface Prefs {
   theme: ThemePref;
   density: DensityPref;
+  /** Writing direction. The theme switches to the Arabic face under `html[dir="rtl"]`. */
+  dir: DirPref;
   railExpanded: boolean;
 }
 
 const STORAGE_KEY = 'marsad.desk.prefs';
-const DEFAULTS: Prefs = { theme: 'system', density: 'compact', railExpanded: false };
+const DEFAULTS: Prefs = { theme: 'system', density: 'compact', dir: 'ltr', railExpanded: false };
 
 function isTheme(v: unknown): v is ThemePref {
   return v === 'system' || v === 'light' || v === 'dark';
 }
 function isDensity(v: unknown): v is DensityPref {
   return v === 'comfortable' || v === 'compact';
+}
+function isDir(v: unknown): v is DirPref {
+  return v === 'ltr' || v === 'rtl';
 }
 
 export function readPrefs(storage: Pick<Storage, 'getItem'> | null): Prefs {
@@ -38,6 +44,7 @@ export function readPrefs(storage: Pick<Storage, 'getItem'> | null): Prefs {
     return {
       theme: isTheme(p['theme']) ? p['theme'] : DEFAULTS.theme,
       density: isDensity(p['density']) ? p['density'] : DEFAULTS.density,
+      dir: isDir(p['dir']) ? p['dir'] : DEFAULTS.dir,
       railExpanded:
         typeof p['railExpanded'] === 'boolean' ? p['railExpanded'] : DEFAULTS.railExpanded,
     };
@@ -57,6 +64,7 @@ function writePrefs(prefs: Prefs): void {
 interface PrefsApi extends Prefs {
   setTheme: (theme: ThemePref) => void;
   setDensity: (density: DensityPref) => void;
+  setDir: (dir: DirPref) => void;
   setRailExpanded: (expanded: boolean) => void;
 }
 
@@ -66,13 +74,14 @@ function systemPrefersDark(): boolean {
   return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
-/** Applies `data-theme` and `data-density` on <html>, the hooks marsad-theme.css keys on. */
-function applyToDocument(theme: ThemePref, density: DensityPref): void {
+/** Applies `data-theme`, `data-density` and `dir` on <html>, the hooks marsad-theme.css keys on. */
+function applyToDocument(theme: ThemePref, density: DensityPref, dir: DirPref): void {
   const root = document.documentElement;
   const dark = theme === 'dark' || (theme === 'system' && systemPrefersDark());
   if (dark) root.setAttribute('data-theme', 'dark');
   else root.removeAttribute('data-theme');
   root.setAttribute('data-density', density);
+  root.setAttribute('dir', dir);
 }
 
 export function PrefsProvider({ children }: { children: ReactNode }) {
@@ -81,12 +90,12 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    applyToDocument(prefs.theme, prefs.density);
+    applyToDocument(prefs.theme, prefs.density, prefs.dir);
     writePrefs(prefs);
     if (prefs.theme !== 'system' || typeof matchMedia !== 'function') return undefined;
     const media = matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => {
-      applyToDocument(prefs.theme, prefs.density);
+      applyToDocument(prefs.theme, prefs.density, prefs.dir);
     };
     media.addEventListener('change', onChange);
     return () => {
@@ -100,13 +109,16 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
   const setDensity = useCallback((density: DensityPref) => {
     setPrefs((p) => ({ ...p, density }));
   }, []);
+  const setDir = useCallback((dir: DirPref) => {
+    setPrefs((p) => ({ ...p, dir }));
+  }, []);
   const setRailExpanded = useCallback((railExpanded: boolean) => {
     setPrefs((p) => ({ ...p, railExpanded }));
   }, []);
 
   const api = useMemo<PrefsApi>(
-    () => ({ ...prefs, setTheme, setDensity, setRailExpanded }),
-    [prefs, setTheme, setDensity, setRailExpanded],
+    () => ({ ...prefs, setTheme, setDensity, setDir, setRailExpanded }),
+    [prefs, setTheme, setDensity, setDir, setRailExpanded],
   );
   return <PrefsContext.Provider value={api}>{children}</PrefsContext.Provider>;
 }

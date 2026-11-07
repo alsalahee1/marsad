@@ -2,11 +2,13 @@ import type { Event } from '@marsad/shared';
 import { useState } from 'react';
 import { CopyIcon } from '../lib/Icons.js';
 import { formatDateTime } from '../lib/format.js';
+import { useOptionalFocus } from '../shell/routeContext.js';
 import { blastRadiusOf, impliedRunState } from './summarize.js';
 
 /** Full view of one event: envelope fields, then the payload exactly as the engine wrote it. */
 export function EventDetail({ event }: { event: Event }) {
   const [copied, setCopied] = useState(false);
+  const focus = useOptionalFocus();
   const radius = blastRadiusOf(event);
   const state = impliedRunState(event);
   const text = JSON.stringify(event, null, 2);
@@ -40,6 +42,19 @@ export function EventDetail({ event }: { event: Event }) {
         <dt>run</dt>
         <dd className="num detail__wrap">{event.runId ?? '—'}</dd>
       </dl>
+      {event.runId !== undefined && focus !== null && focus.focus.run !== event.runId && (
+        <div className="detail__actions">
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => {
+              focus.openRun(event.runId ?? '');
+            }}
+          >
+            Open run
+          </button>
+        </div>
+      )}
       <div className="detail__payload-head">
         <span>payload</span>
         <button

@@ -1,6 +1,19 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { CloseIcon } from './Icons.js';
 
+/** Browsers give us the top layer; a DOM without `showModal` (tests) just gets the open attribute. */
+export function openModal(el: HTMLDialogElement): void {
+  if (el.open) return;
+  if (typeof el.showModal === 'function') el.showModal();
+  else el.setAttribute('open', '');
+}
+
+export function closeModal(el: HTMLDialogElement): void {
+  if (!el.open) return;
+  if (typeof el.close === 'function') el.close();
+  else el.removeAttribute('open');
+}
+
 interface OverlayProps {
   /** `sheet` is the phone's full-screen surface; `dialog` is the centred one elsewhere. */
   mode: 'sheet' | 'dialog';
@@ -20,7 +33,7 @@ export function Overlay({ mode, title, onClose, children }: OverlayProps) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
-    if (!el.open) el.showModal();
+    openModal(el);
     const onCancel = (e: Event) => {
       e.preventDefault();
       onClose();
@@ -28,7 +41,7 @@ export function Overlay({ mode, title, onClose, children }: OverlayProps) {
     el.addEventListener('cancel', onCancel);
     return () => {
       el.removeEventListener('cancel', onCancel);
-      if (el.open) el.close();
+      closeModal(el);
     };
   }, [onClose]);
 

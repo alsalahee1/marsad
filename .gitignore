@@ -33,3 +33,6 @@ dump.rdb
 !.vscode/extensions.json
 coverage/
 .turbo/
+
+# Screenshot output of apps/desk/e2e/screenshots.mjs
+apps/desk/e2e/screenshots/

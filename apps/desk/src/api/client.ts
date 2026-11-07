@@ -39,7 +39,7 @@ export function onUnauthorized(listener: UnauthorizedListener): () => void {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
   signal?: AbortSignal;
 }

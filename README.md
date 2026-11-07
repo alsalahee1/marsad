@@ -141,7 +141,7 @@ Runs that were halted stay halted (terminal); re-create them when ready.
 | `POST /runs/:id/halt`                                     | session | halt one run (idempotent)                                                                                 |
 | `GET /approvals?status=&limit=`                           | session | queue items: `{ approval, toolCall, run, agent }`; pending ones whose run is no longer blocked are hidden |
 | `POST /approvals/:id/token`, `POST /approvals/:id/decide` | session | single-use token, then the decision                                                                       |
-| `GET /tools`, `GET /budgets/today`                        | session | registry snapshot, today's spend vs caps                                                                  |
+| `GET /tools`, `GET /budgets/today`, `GET /limits`         | session | registry snapshot, today's spend vs caps, the enforced ceilings and caps (read-only)                      |
 
 Every response body has a zod schema in `@marsad/shared` (`AgentRosterResponseSchema`,
 `RunPageResponseSchema`, `RunDetailResponseSchema`, `ApprovalQueueResponseSchema`, ...); the
@@ -177,6 +177,28 @@ What exists today:
   desk checks the session and reopens from the last id it holds, with exponential backoff.
 - The global-halt flag on screen is a projection of `system.halted` / `system.resumed` rows;
   `GET /system` only fills the gap when no such row is inside the buffer's window.
+- **Desk home.** Four tiles answer the four questions first: agents running, spent today against
+  the day cap (a meter), decisions waiting, and what broke in the last 24 hours (failed runs and
+  ceiling halts, each a link to the run). The system panel and the log sit under them.
+- **Agents.** The roster (`GET /agents`) as a virtualised table from fold up and as cards on the
+  phone; state is the only hue, every figure is tabular. Create and edit agents (the tool picker
+  shows each tool's blast radius as a stripe and a word), retire with `enabled: false`, start a
+  run from the detail. Tablet and desktop pair list and detail, fold stacks them, wide puts the
+  detail in the inspector, phone opens a full-screen sheet.
+- **Approvals.** One queue for irreversible calls and budget holds, oldest first, with the risk
+  stripe per kind. Deciding mints a single-use token and spends it (`decideApproval`); approving
+  an irreversible call takes two clicks, "allow once" on a budget hold takes one. Phone rows
+  swipe: toward the end uncovers Reject, toward the start uncovers Approve, and the uncovered
+  button acts. The pending count is the badge on the rail and tab bar.
+- **Run detail.** Opens from anywhere (`?run=<id>`): state chip, usage against every ceiling
+  and the per-run cap as meters (`GET /limits`), the decision it is waiting on with its actions,
+  the tool calls, the timeline from `GET /events/tail?runId=`, and a single-run halt. Phone and
+  fold use a full-screen sheet, tablet and desktop a dialog, wide the inspector.
+- **Command palette** (⌘K / Ctrl+K, tablet and up): destinations, halt/resume, agents, pending
+  decisions and recent runs, filtered as you type.
+- Every read model is a `useLiveQuery`: fetched from the engine, re-fetched when a relevant event
+  arrives on the stream. There is no second copy of the state machine in the browser.
+- Settings add a writing-direction switch; `html[dir="rtl"]` moves the desk to the Arabic face.
 
 Theme: `marsad-theme.css` is imported right after `@import "tailwindcss"`; the desk's own layer
 (`desk.css`) uses its tokens only — no hex anywhere. All numbers render in the tabular mono
@@ -199,8 +221,17 @@ Two constraints follow from the session cookie being `SameSite=Strict`:
   with `proxy_buffering off` for `/api/events/stream`), and `try_files $uri /index.html` for the
   SPA routes. Set the usual headers there (`Content-Security-Policy`, `frame-ancestors 'none'`).
 
-Not in this slice: the agent roster, the approval queue, budgets, the command palette, and the
-agent loop itself. Those views are routed stubs; everything they need is already in the stream.
+Not in the desk yet: the six-series chart (desktop only by design) and the agent loop itself,
+which lives in the engine (see "Extension points").
+
+To render every screen at 375, 600, 768, 1024 and 1440px in light, dark and RTL against a
+running engine (`apps/desk/e2e/screenshots.mjs`, Chromium via Playwright, not part of
+`pnpm test`):
+
+```sh
+OPERATOR_PASSWORD='...' PLAYWRIGHT=/path/to/node_modules/playwright \
+  node apps/desk/e2e/screenshots.mjs apps/desk/e2e/screenshots
+```
 
 ## Docker
 

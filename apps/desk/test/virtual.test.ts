@@ -54,17 +54,28 @@ describe('navigation', () => {
 
 describe('readPrefs', () => {
   it('falls back to defaults on missing, malformed, or foreign values', () => {
-    expect(readPrefs(null)).toEqual({ theme: 'system', density: 'compact', railExpanded: false });
+    expect(readPrefs(null)).toEqual({
+      theme: 'system',
+      density: 'compact',
+      dir: 'ltr',
+      railExpanded: false,
+    });
     expect(readPrefs({ getItem: () => '{nope' })).toEqual({
       theme: 'system',
       density: 'compact',
+      dir: 'ltr',
       railExpanded: false,
     });
     expect(
       readPrefs({
         getItem: () =>
-          JSON.stringify({ theme: 'neon', density: 'comfortable', railExpanded: 'yes' }),
+          JSON.stringify({
+            theme: 'neon',
+            density: 'comfortable',
+            dir: 'ltr',
+            railExpanded: 'yes',
+          }),
       }),
-    ).toEqual({ theme: 'system', density: 'comfortable', railExpanded: false });
+    ).toEqual({ theme: 'system', density: 'comfortable', dir: 'ltr', railExpanded: false });
   });
 });

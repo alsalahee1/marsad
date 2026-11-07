@@ -3,7 +3,7 @@ import { API_BASE } from '../api/base.js';
 import { useSession } from '../auth/session.js';
 import { Panel } from '../lib/Panel.js';
 import { formatDateTime } from '../lib/format.js';
-import { usePrefs, type DensityPref, type ThemePref } from '../lib/prefs.js';
+import { usePrefs, type DensityPref, type DirPref, type ThemePref } from '../lib/prefs.js';
 import { ConnectionIndicator } from '../log/EventLogPanel.js';
 import { useEventStream } from '../log/EventStreamProvider.js';
 import { lastId } from '../log/eventBuffer.js';
@@ -17,6 +17,10 @@ const THEMES: { value: ThemePref; label: string }[] = [
 const DENSITIES: { value: DensityPref; label: string }[] = [
   { value: 'compact', label: 'Compact' },
   { value: 'comfortable', label: 'Comfortable' },
+];
+const DIRS: { value: DirPref; label: string }[] = [
+  { value: 'ltr', label: 'Left to right' },
+  { value: 'rtl', label: 'Right to left' },
 ];
 
 function Choice<T extends string>({
@@ -82,6 +86,14 @@ export function SettingsView({ viewport }: { viewport: Viewport }) {
           options={DENSITIES}
           onChange={prefs.setDensity}
           {...(viewport === 'phone' ? { note: 'Phone rows are always comfortable.' } : {})}
+        />
+        <Choice
+          name="dir"
+          legend="Direction"
+          value={prefs.dir}
+          options={DIRS}
+          onChange={prefs.setDir}
+          note="Right to left switches to the Arabic face."
         />
       </Panel>
       <Panel title="Session">

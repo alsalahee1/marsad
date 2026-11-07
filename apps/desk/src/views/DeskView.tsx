@@ -2,6 +2,7 @@ import type { Event } from '@marsad/shared';
 import { useCallback, useState } from 'react';
 import { API_BASE } from '../api/base.js';
 import { useSession } from '../auth/session.js';
+import { DeskTiles } from '../desk/Tiles.js';
 import { Overlay } from '../lib/Overlay.js';
 import { Panel } from '../lib/Panel.js';
 import { formatClock, formatDateTime } from '../lib/format.js';
@@ -80,6 +81,7 @@ export function DeskView({ viewport }: { viewport: Viewport }) {
 
   return (
     <div className="view view--desk">
+      <DeskTiles />
       <SystemPanel />
       <EventLogPanel onOpen={onOpen} />
       {openEvent !== null && viewport !== 'wide' && (

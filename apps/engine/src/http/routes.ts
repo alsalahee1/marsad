@@ -350,6 +350,19 @@ export function protectedRoutes(deps: AppDeps): Router {
   r.get('/tools', async (_req, res) => {
     res.json({ tools: await deps.store.tools.list() });
   });
+  // Read-only: the desk draws meters against these. Nothing here can be changed over HTTP.
+  r.get('/limits', (_req, res) => {
+    const { ceilings, budget, approvals } = deps.config;
+    res.json({
+      maxSteps: ceilings.maxSteps,
+      maxTokens: ceilings.maxTokens,
+      maxWallClockMs: ceilings.maxWallClockMs,
+      perRunUsd: budget.perRunUsd,
+      perDayUsd: budget.perDayUsd,
+      perDayCalls: budget.perDayCalls,
+      approvalTokenTtlMs: approvals.tokenTtlMs,
+    });
+  });
   r.get('/budgets/today', async (_req, res) => {
     const day = utcDay(deps.clock());
     const budget = await deps.store.budgets.get('day', day);

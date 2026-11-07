@@ -94,6 +94,7 @@ describe('auth', () => {
       '/events/stream',
       '/system',
       '/tools',
+      '/limits',
       '/auth/session',
     ]) {
       const res = await request(app).get(path);
@@ -389,6 +390,25 @@ describe('runs', () => {
       .send({ agentId: agent.body.agent.id, task: 'go' });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('system_halted');
+  });
+});
+
+describe('limits', () => {
+  it('exposes the enforced ceilings and caps read-only', async () => {
+    const { app } = await appWith();
+    const cookie = await login(app);
+    const res = await request(app).get('/limits').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      maxSteps: 10,
+      maxTokens: 10_000,
+      maxWallClockMs: 60_000,
+      perRunUsd: 1,
+      perDayUsd: 5,
+      perDayCalls: 100,
+      approvalTokenTtlMs: 600_000,
+    });
+    expect((await request(app).post('/limits').set('Cookie', cookie).send({})).status).toBe(404);
   });
 });
 

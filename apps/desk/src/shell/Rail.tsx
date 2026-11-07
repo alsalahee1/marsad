@@ -3,15 +3,28 @@ import { usePrefs } from '../lib/prefs.js';
 import { HaltControl } from './HaltControl.js';
 import { DESTINATIONS, type Destination } from './navigation.js';
 
+export type Badges = Partial<Record<Destination, number>>;
+
+function Badge({ count, label }: { count: number | undefined; label: string }) {
+  if (count === undefined || count <= 0) return null;
+  return (
+    <span className="badge num" aria-label={`${count} ${label}`}>
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
 interface RailProps {
   current: Destination;
   onNavigate: (dest: Destination) => void;
   /** Tablet keeps the rail icon-only; desktop may expand it to 240px. */
   expandable: boolean;
+  /** Counts shown on a destination: decisions waiting on Approvals. */
+  badges?: Badges;
 }
 
 /** The icon rail: 56px, expands to 240px on request. Halt sits at the bottom, one tap away. */
-export function Rail({ current, onNavigate, expandable }: RailProps) {
+export function Rail({ current, onNavigate, expandable, badges = {} }: RailProps) {
   const { railExpanded, setRailExpanded } = usePrefs();
   const expanded = expandable && railExpanded;
   return (
@@ -36,7 +49,10 @@ export function Rail({ current, onNavigate, expandable }: RailProps) {
                   onNavigate(d.id);
                 }}
               >
-                <Icon />
+                <span className="rail-item__icon">
+                  <Icon />
+                  <Badge count={badges[d.id]} label="waiting" />
+                </span>
                 <span className="rail-item__label">{d.label}</span>
               </button>
             </li>
