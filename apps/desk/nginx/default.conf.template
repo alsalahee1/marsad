@@ -1,0 +1,77 @@
+# Desk container Nginx. Rendered once at container start into /etc/nginx/conf.d/default.conf;
+# ${ENGINE_UPSTREAM} and ${NGINX_RESOLVER} are the only substitutions (Dockerfile defaults:
+# engine:8080 and Docker's embedded DNS). Everything else with a $ is Nginx's own.
+#
+# The desk is a static bundle; everything under /api/ is the engine with the prefix stripped.
+# TLS terminates at the host Nginx in front of this container (deploy/nginx/marsad.vps.conf.example).
+
+# The scheme the edge proxy saw, if it told us; otherwise ours.
+map $http_x_forwarded_proto $marsad_forwarded_proto {
+    default $scheme;
+    https   https;
+}
+
+# Hashed bundles never change under their name; the HTML shell and everything else revalidate.
+map $uri $marsad_cache_control {
+    default      "no-cache";
+    ~^/assets/   "public, max-age=31536000, immutable";
+}
+
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    server_tokens off;
+    client_max_body_size 1m;
+
+    # Resolve the engine's name per request (cached 30s) instead of once at startup.
+    resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+    set $marsad_engine "${ENGINE_UPSTREAM}";
+
+    # The app is strictly same-origin: its scripts, styles, fonts and API all come from here.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cache-Control $marsad_cache_control always;
+
+    # Liveness for the container healthcheck. No engine round-trip, no log line.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /assets/ {
+        try_files $uri =404;
+    }
+
+    # The live feed is one long response flushed as events happen; buffering would hold them.
+    # The engine heartbeats, so the long read timeout is only a ceiling.
+    location = /api/events/stream {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$marsad_engine;
+        include /etc/nginx/marsad/proxy-params.inc;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$marsad_engine;
+        include /etc/nginx/marsad/proxy-params.inc;
+        proxy_read_timeout 60s;
+    }
+
+    # SPA routes are client-side; unknown paths get the shell.
+    location / {
+        try_files $uri /index.html;
+    }
+}

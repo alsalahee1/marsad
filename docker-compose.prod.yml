@@ -1,0 +1,120 @@
+# Production stack for one VPS: MySQL 8, Redis 7, the engine, and the desk (Nginx) which is the
+# only published port, bound to loopback for the host Nginx in front of it
+# (deploy/nginx/marsad.vps.conf.example terminates TLS and proxies to it).
+#
+#   cp .env.example .env            # fill in every secret; see README → Deployment
+#   docker compose -f docker-compose.prod.yml pull     # images from GHCR (built by CI on main) …
+#   docker compose -f docker-compose.prod.yml build    # … or build them here
+#   docker compose -f docker-compose.prod.yml up -d    # migrates, then starts the engine and desk
+#
+# .env is read twice: by compose for the ${...} values below, and by the engine (env_file).
+# Variables the engine must not see are blanked in its environment block.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '20m'
+    max-file: '5'
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-marsad}
+      # Read once by docker/mysql/init-prod/01-users.sh when the data volume is first created.
+      # Deliberately not MYSQL_USER / MYSQL_PASSWORD: the image would grant that user everything.
+      MARSAD_APP_USER: ${MYSQL_USER:-marsad_app}
+      MARSAD_APP_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MARSAD_MIGRATE_USER: ${MYSQL_MIGRATE_USER:-marsad_migrate}
+      MARSAD_MIGRATE_PASSWORD: ${MYSQL_MIGRATE_PASSWORD:?set MYSQL_MIGRATE_PASSWORD in .env}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    volumes:
+      - ./docker/mysql/init-prod:/docker-entrypoint-initdb.d:ro
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      ['redis-server', '--appendonly', 'yes', '--save', '', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  # Applies pending migrations and the app user's table grants, then exits. The engine waits for it.
+  migrate:
+    image: ${MARSAD_IMAGE_PREFIX:-ghcr.io/alsalahee1/marsad}-engine:${MARSAD_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/engine/Dockerfile
+    restart: 'no'
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      MYSQL_HOST: mysql
+      REDIS_URL: redis://redis:6379
+      MYSQL_ROOT_PASSWORD: ''
+    command: ['node', 'apps/engine/dist/db/migrate.js']
+    depends_on:
+      mysql:
+        condition: service_healthy
+    logging: *logging
+
+  engine:
+    image: ${MARSAD_IMAGE_PREFIX:-ghcr.io/alsalahee1/marsad}-engine:${MARSAD_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/engine/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: '8080'
+      MYSQL_HOST: mysql
+      REDIS_URL: redis://redis:6379
+      # Two proxies sit in front (host Nginx, desk Nginx), both on private addresses. Trusting
+      # the private ranges, and only those, keeps the login rate-limit keyed on the real client.
+      TRUST_PROXY: uniquelocal
+      # Compose-only secrets never reach the engine process.
+      MYSQL_ROOT_PASSWORD: ''
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    logging: *logging
+
+  desk:
+    image: ${MARSAD_IMAGE_PREFIX:-ghcr.io/alsalahee1/marsad}-desk:${MARSAD_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/desk/Dockerfile
+    restart: unless-stopped
+    environment:
+      ENGINE_UPSTREAM: engine:8080
+    ports:
+      - '127.0.0.1:${MARSAD_DESK_PORT:-8088}:8080'
+    depends_on:
+      engine:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  mysql-data:
+  redis-data:

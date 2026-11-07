@@ -7,3 +7,5 @@ pnpm-lock.yaml
 apps/desk/src/styles/marsad-theme.css
 # Project instructions are hand-formatted; never touched by tooling.
 CLAUDE.md
+# Nginx configuration; prettier guesses html from the .inc extension.
+apps/desk/nginx/

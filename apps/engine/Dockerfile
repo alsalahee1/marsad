@@ -5,15 +5,20 @@
 FROM node:22-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 WORKDIR /app
 
 # --- all dependencies, for building ---
+# Every workspace manifest is copied so the lockfile and the workspace agree; the filter installs
+# only the engine and what it depends on (nothing of the desk).
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/engine/package.json apps/engine/
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile
+COPY apps/desk/package.json apps/desk/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter "@marsad/engine..."
 
 # --- compile shared + engine ---
 FROM deps AS build
@@ -27,7 +32,9 @@ FROM base AS prod-deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/engine/package.json apps/engine/
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile --prod
+COPY apps/desk/package.json apps/desk/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --prod --filter "@marsad/engine..."
 
 # --- runtime ---
 FROM node:22-bookworm-slim AS runtime

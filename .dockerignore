@@ -1,11 +1,13 @@
+# Build context for both images (apps/engine/Dockerfile, apps/desk/Dockerfile): sources only.
+.git
 **/node_modules
 **/dist
 **/coverage
 **/*.tsbuildinfo
-.git
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 docker/
-.docker-data/
-apps/desk
+deploy/
+.github/
+apps/desk/e2e/

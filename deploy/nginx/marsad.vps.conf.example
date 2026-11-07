@@ -1,0 +1,62 @@
+# Host Nginx on the VPS — the instance that already serves your other sites. TLS terminates here;
+# everything is proxied to the desk container (docker-compose.prod.yml publishes it on
+# 127.0.0.1:8088), which serves the bundle and proxies /api/ to the engine.
+#
+# Install:
+#   sudo cp deploy/nginx/marsad.vps.conf.example /etc/nginx/sites-available/marsad
+#   edit server_name (3 places) and MARSAD_DESK_PORT if you changed it
+#   sudo ln -s /etc/nginx/sites-available/marsad /etc/nginx/sites-enabled/marsad
+#   sudo certbot --nginx -d marsad.example.com      # fills in the ssl_* lines below
+#   sudo nginx -t && sudo systemctl reload nginx
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name marsad.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name marsad.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/marsad.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/marsad.example.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    # One operator. Allow-listing your addresses here removes the login form from the internet:
+    # allow 203.0.113.7;
+    # deny all;
+
+    client_max_body_size 1m;
+    access_log /var/log/nginx/marsad.access.log;
+    error_log  /var/log/nginx/marsad.error.log;
+
+    # The live feed: never buffer, and let it stay open (the engine heartbeats).
+    location = /api/events/stream {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 60s;
+    }
+}

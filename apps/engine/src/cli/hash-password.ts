@@ -19,4 +19,6 @@ const phc = await hash(password, {
   timeCost: 3,
   parallelism: 1,
 });
-console.log('\nOPERATOR_PASSWORD_HASH=' + phc);
+// Single quotes: the PHC string is full of `$`, which docker compose would otherwise expand as
+// variable references when it reads .env. Node's --env-file and the engine strip the quotes.
+console.log(`\nOPERATOR_PASSWORD_HASH='${phc}'`);

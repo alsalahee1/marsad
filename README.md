@@ -8,9 +8,12 @@ their enforcement.
 
 ```
 packages/shared   domain contracts (zod schemas, RunStatus, BlastRadius, Event union, SSE envelope)
-apps/engine       Express 5 API, MySQL event log, BullMQ worker, tool registry + executor
-apps/desk         React + Vite + Tailwind v4 desk: auth gate, shell, live event log
-docker/           MySQL init SQL (both DB accounts)
+apps/engine       Express 5 API, MySQL event log, BullMQ worker, tool registry, executor, agent loop
+apps/desk         React + Vite + Tailwind v4 desk; apps/desk/nginx is its production server config
+docker/           MySQL account init: init/ (dev credentials), init-prod/ (passwords from .env)
+deploy/           host Nginx vhost example for the VPS
+docker-compose.yml        local MySQL + Redis (+ engine)     docker-compose.prod.yml  the VPS stack
+.github/workflows/ci.yml  lint, typecheck, tests against MySQL + Redis, build, images to GHCR
 ```
 
 Node 22, pnpm 10 (pinned in `package.json#packageManager`), TypeScript strict with
@@ -263,10 +266,9 @@ Two constraints follow from the session cookie being `SameSite=Strict`:
   `http://localhost:5173` and point it at `http://localhost:8080`, never at `127.0.0.1` (a
   different site — the cookie would not be sent). `CORS_ORIGINS` in `.env` must list the exact
   Vite origin; Vite is pinned to port 5173 with `strictPort` so that origin cannot drift.
-- In production serve the built `apps/desk/dist` from Nginx and proxy `/api/` to the engine on
-  the same origin, stripping the prefix (`location /api/ { proxy_pass http://127.0.0.1:8080/; }`
-  with `proxy_buffering off` for `/api/events/stream`), and `try_files $uri /index.html` for the
-  SPA routes. Set the usual headers there (`Content-Security-Policy`, `frame-ancestors 'none'`).
+- In production the desk container's Nginx (`apps/desk/nginx/default.conf.template`) serves
+  the bundle and proxies `/api/` to the engine on the same origin, stripping the prefix, with
+  buffering off for `/api/events/stream` and `index.html` for SPA routes. See "Deployment".
 
 Not in the desk yet: the six-series chart (desktop only by design) and the agent loop itself,
 which lives in the engine (see "Extension points").
@@ -280,12 +282,132 @@ OPERATOR_PASSWORD='...' PLAYWRIGHT=/path/to/node_modules/playwright \
   node apps/desk/e2e/screenshots.mjs apps/desk/e2e/screenshots
 ```
 
-## Docker
+## Deployment
 
-`apps/engine/Dockerfile` is multi-stage (deps → build → prod-deps → runtime), runs as `node`,
-ships production dependencies only, and exposes a `/health` healthcheck. `docker-compose.yml`
-brings up MySQL 8.0 (with the init SQL), Redis 7, the engine, and a one-shot `migrate` service
-(`docker compose run --rm migrate`).
+Target: one VPS that already runs Nginx for other sites. MARSAD runs as four containers from
+`docker-compose.prod.yml` (MySQL 8, Redis 7, engine, desk). The desk container is Nginx serving
+the built bundle and proxying `/api/` to the engine; it is the only published port, bound to
+`127.0.0.1:8088`. The host Nginx terminates TLS and proxies to it
+(`deploy/nginx/marsad.vps.conf.example`). Nothing else is reachable from outside.
+
+### Images
+
+Both images are multi-stage, run as non-root, and carry no secrets or environment-specific
+values. CI (`.github/workflows/ci.yml`) builds and publishes them to GHCR on every push to
+`main` and on `v*` tags: `ghcr.io/alsalahee1/marsad-engine` and
+`ghcr.io/alsalahee1/marsad-desk`, tagged `latest`, `sha-<short>` and the version.
+
+- `apps/engine/Dockerfile` — install → build → prod-deps → runtime (`node`, production
+  dependencies only, `/health` healthcheck). Also the `migrate` service's image.
+- `apps/desk/Dockerfile` — install → build → `nginxinc/nginx-unprivileged` (uid 101, port 8080).
+  `apps/desk/nginx/default.conf.template` is rendered at container start with `ENGINE_UPSTREAM`
+  (default `engine:8080`) resolved per request, so an engine restart never strands Nginx. It
+  strips the `/api/` prefix, turns buffering off for `/api/events/stream` with a one-hour read
+  timeout (the engine heartbeats), serves hashed assets as immutable and the shell as
+  `no-cache`, falls back to `index.html` for SPA routes, answers `/healthz` itself, and sets a
+  same-origin `Content-Security-Policy` (`script-src 'self'`, `frame-ancestors 'none'`).
+
+### First deploy
+
+Prerequisites on the VPS: Docker Engine with the compose plugin, Nginx, certbot, a DNS name
+pointing at the host. If the repository is private, `docker login ghcr.io` with a token that has
+`read:packages`, or build on the VPS instead of pulling.
+
+```sh
+git clone https://github.com/alsalahee1/marsad.git && cd marsad
+cp .env.example .env
+```
+
+Fill in `.env`. Everything under the engine section is read by the engine; the block under
+`# --- Deployment:` is read by compose only. In particular:
+
+| key                                        | value                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| `NODE_ENV`                                 | `production`                                                         |
+| `CORS_ORIGINS`                             | the public origin, e.g. `https://marsad.example.com`                 |
+| `MYSQL_PASSWORD`, `MYSQL_MIGRATE_PASSWORD` | new random passwords; the first boot creates both accounts with them |
+| `MYSQL_ROOT_PASSWORD`                      | a third one, for the container's root                                |
+| `SESSION_SECRET`                           | 32+ random characters                                                |
+| `OPERATOR_PASSWORD_HASH`                   | the line printed by `pnpm --filter @marsad/engine hash-password`     |
+| `ANTHROPIC_API_KEY`, `AGENT_MODEL`         | the key; the model used when an agent says `default`                 |
+
+Wrap any value that contains `$` in single quotes (the hash always does); compose expands
+`$NAME` inside `.env` otherwise and the hash arrives mangled. `MYSQL_HOST`, `REDIS_URL`, `PORT`
+and `TRUST_PROXY` are overridden by the compose file for the containers (`mysql`, `redis`,
+`8080`, `uniquelocal`) — leave the engine defaults for local use.
+
+```sh
+docker compose -f docker-compose.prod.yml pull      # or: build
+docker compose -f docker-compose.prod.yml up -d     # mysql, redis → migrate (one-shot) → engine → desk
+docker compose -f docker-compose.prod.yml ps        # all healthy, migrate exited 0
+curl -s http://127.0.0.1:8088/api/health            # {"ok":true}
+```
+
+The first MySQL start runs `docker/mysql/init-prod/01-users.sh`, which creates the two accounts
+with the passwords from `.env` (nothing is written to disk; the development compose file uses
+the fixed dev credentials from `docker/mysql/init/01-users.sql` instead). `migrate` applies the
+schema, the append-only triggers and the app user's table grants, then exits; the engine waits
+for it and refuses to start on pending migrations or over-broad grants.
+
+Then the host Nginx:
+
+```sh
+sudo cp deploy/nginx/marsad.vps.conf.example /etc/nginx/sites-available/marsad
+sudo sed -i 's/marsad.example.com/marsad.YOURDOMAIN/g' /etc/nginx/sites-available/marsad
+sudo ln -s /etc/nginx/sites-available/marsad /etc/nginx/sites-enabled/marsad
+sudo certbot --nginx -d marsad.YOURDOMAIN
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The example proxies everything to `127.0.0.1:8088`, with a separate `location` for the event
+stream (`proxy_buffering off`, long read timeout) and HSTS. For a single operator, uncomment
+the `allow` / `deny all` lines with your addresses: the login form then never faces the
+internet, and the engine's 5-per-15-minutes login limit is the second line, not the first.
+
+### Verifying a deployment
+
+`apps/desk/e2e/smoke.mjs` drives the production bundle through the real proxy chain in a
+headless Chromium: one API login, then it loads the desk and fails on any console error, CSP
+violation, failed request, or a live stream that does not connect. Run it from any machine with
+Playwright's Chromium:
+
+```sh
+BASE_URL=https://marsad.example.com OPERATOR_PASSWORD='...' \
+  PLAYWRIGHT=/path/to/node_modules/playwright node apps/desk/e2e/smoke.mjs
+```
+
+### Updating
+
+```sh
+git pull
+docker compose -f docker-compose.prod.yml pull      # or: build
+docker compose -f docker-compose.prod.yml up -d     # re-runs migrate, recreates what changed
+```
+
+Pin a version instead of `latest` with `MARSAD_IMAGE_TAG=sha-<short>` (or `v1.2.3`) in `.env`;
+rolling back is setting it to the previous tag and running `up -d` again. Migrations are
+forward-only: do not roll back past a release that added one.
+
+### Operating
+
+```sh
+docker compose -f docker-compose.prod.yml logs -f engine            # JSON lines, pino
+docker compose -f docker-compose.prod.yml exec -T mysql \
+  mysqldump --single-transaction --triggers -uroot -p"$MYSQL_ROOT_PASSWORD" marsad \
+  | gzip > marsad-$(date +%F).sql.gz                                # backup (keep off the host too)
+docker compose -f docker-compose.prod.yml down                      # stop; volumes stay
+```
+
+Restore by piping a dump into `mysql` the same way, with the stack stopped except `mysql`. The
+events table is append-only, so the database only grows; size it and prune by archiving whole
+periods, never by deleting rows in place. Redis holds only the queue and the halt flag mirror;
+losing it loses queued (not running) runs, which stay `queued` in MySQL and can be re-created.
+
+### Not done from here
+
+This repository can be built, tested and its images published without a VPS; the deployment
+itself has to be run on the host. What is not automated: creating `.env` on the VPS, the DNS
+record, the certbot run, the `ghcr.io` login for a private package, and off-host backups.
 
 ## Development planner and demo tools
 

@@ -81,12 +81,26 @@ describe('config loader', () => {
     expect(config.mysql.password.reveal()).toBe('hunter2-db');
   });
 
-  it('parses exactly the keys documented in .env.example', () => {
+  it('parses exactly the engine keys documented in .env.example', () => {
     const example = readFileSync(new URL('../../../../.env.example', import.meta.url), 'utf8');
-    const documented = example
+    // Keys under the deployment marker are docker compose's (image tag, published port, MySQL
+    // root password); the engine never reads them, so they are not in the schema.
+    const engineSection = example.split('# --- Deployment:')[0] ?? '';
+    const documented = engineSection
       .split('\n')
       .map((l) => /^([A-Z0-9_]+)=/.exec(l)?.[1])
       .filter((k): k is string => k !== undefined);
     expect([...documented].sort()).toEqual([...ENV_KEYS].sort());
+  });
+
+  it('keeps the deployment-only keys out of the engine schema', () => {
+    const example = readFileSync(new URL('../../../../.env.example', import.meta.url), 'utf8');
+    const deploySection = example.split('# --- Deployment:')[1] ?? '';
+    const deployKeys = deploySection
+      .split('\n')
+      .map((l) => /^([A-Z0-9_]+)=/.exec(l)?.[1])
+      .filter((k): k is string => k !== undefined);
+    expect(deployKeys.length).toBeGreaterThan(0);
+    for (const key of deployKeys) expect(ENV_KEYS).not.toContain(key);
   });
 });
