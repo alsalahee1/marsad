@@ -65,12 +65,15 @@ export function executorSuite(makeStore: () => Promise<Store>): void {
       expect(h.counts.echo).toBe(0);
       const run = await store.runs.get(runId);
       expect(run?.status).toBe('blocked');
-      expect(run?.blockedOn).toEqual({ kind: 'budget', id: runId });
+      // The hold is an approval of kind `budget`; the run points at it like any other block.
+      const [hold] = await store.approvals.list({ status: 'pending', limit: 10 });
+      expect(hold?.kind).toBe('budget');
+      expect(run?.blockedOn).toEqual({ kind: 'budget', id: hold?.id });
       const calls = await store.toolCalls.listByRun(runId);
       expect(calls.map((c) => c.status)).toEqual(['executed', 'blocked']);
+      expect(hold?.toolCallId).toBe(calls[1]?.id);
       const types = await h.eventTypes();
-      expect(types).toContain('budget.exceeded');
-      expect(types[types.length - 1]).toBe('run.blocked');
+      expect(types.slice(-3)).toEqual(['budget.exceeded', 'approval.requested', 'run.blocked']);
       const budget = await store.budgets.get('run', runId);
       expect(budget?.spentUsd).toBeCloseTo(0.7, 6);
     });
@@ -85,10 +88,107 @@ export function executorSuite(makeStore: () => Promise<Store>): void {
       expect((await h.executor.execute(runId)).status).toBe('blocked');
       expect(h.counts.pay).toBe(1);
       const run = await store.runs.get(runId);
-      expect(run?.blockedOn?.kind).toBe('budget');
-      expect(run?.blockedOn?.id).toBe('2026-09-09');
+      const [hold] = await store.approvals.list({ status: 'pending', limit: 10 });
+      expect(run?.blockedOn).toEqual({ kind: 'budget', id: hold?.id });
       expect((await store.budgets.get('run', runId))?.spentUsd).toBeCloseTo(0.1, 6);
       expect((await store.budgets.get('day', '2026-09-09'))?.callCount).toBe(1);
+      const events = await store.events.listAfter(null, 100);
+      const exceeded = events.find((e) => e.type === 'budget.exceeded');
+      expect(exceeded?.payload).toMatchObject({
+        scope: 'day',
+        key: '2026-09-09',
+        approvalId: hold?.id,
+      });
+    });
+
+    it('budget hold approved => that one call runs past the cap, the ledger records it, and the next over-cap call holds again', async () => {
+      const h = await buildHarness(store, {
+        script: [
+          call('pay', { usd: 0.7 }),
+          call('pay', { usd: 0.7 }),
+          call('pay', { usd: 0.7 }),
+          call('echo', { message: 'end' }),
+        ],
+      });
+      const agent = await h.createAgent();
+      const runId = await h.createRun(agent);
+      expect(await h.executor.execute(runId)).toEqual({ status: 'blocked', reason: 'budget' });
+      let [hold] = await store.approvals.list({ status: 'pending', limit: 10 });
+      if (!hold) throw new Error('no hold');
+      expect(hold.kind).toBe('budget');
+      const issued = await h.approvals.issueToken(hold.id);
+      if (!issued) throw new Error('no token');
+      const decided = await h.approvals.decide(hold.id, issued.token, 'approve', 'op');
+      expect(decided.ok).toBe(true);
+      expect((await store.runs.get(runId))?.status).toBe('queued');
+      expect(h.queue.enqueued.map((e) => e.runId)).toEqual([runId]);
+
+      // Resume: the allowed call runs once, over the cap; the third pay is held again.
+      expect(await h.executor.execute(runId)).toEqual({ status: 'blocked', reason: 'budget' });
+      expect(h.counts.pay).toBe(2);
+      const runBudget = await store.budgets.get('run', runId);
+      expect(runBudget?.spentUsd).toBeCloseTo(1.4, 6);
+      expect(runBudget?.callCount).toBe(2);
+      expect((await store.budgets.get('day', '2026-09-09'))?.spentUsd).toBeCloseTo(1.4, 6);
+      expect((await store.runs.get(runId))?.costUsd).toBeCloseTo(1.4, 6);
+      [hold] = await store.approvals.list({ status: 'pending', limit: 10 });
+      expect(hold?.kind).toBe('budget');
+      const calls = await store.toolCalls.listByRun(runId);
+      expect(calls.map((c) => c.status)).toEqual(['executed', 'executed', 'blocked']);
+      const decidedEvent = (await store.events.listAfter(null, 100)).find(
+        (e) => e.type === 'approval.decided',
+      );
+      expect(decidedEvent?.payload).toMatchObject({ decision: 'approve', kind: 'budget' });
+    });
+
+    it('budget hold rejected => the call never runs and the run continues past it', async () => {
+      const h = await buildHarness(store, {
+        script: [
+          call('pay', { usd: 0.7 }),
+          call('pay', { usd: 0.7 }),
+          call('echo', { message: 'end' }),
+        ],
+      });
+      const agent = await h.createAgent();
+      const runId = await h.createRun(agent);
+      expect(await h.executor.execute(runId)).toEqual({ status: 'blocked', reason: 'budget' });
+      const [hold] = await store.approvals.list({ status: 'pending', limit: 10 });
+      if (!hold) throw new Error('no hold');
+      const issued = await h.approvals.issueToken(hold.id);
+      if (!issued) throw new Error('no token');
+      expect((await h.approvals.decide(hold.id, issued.token, 'reject', 'op')).ok).toBe(true);
+      expect((await h.executor.execute(runId)).status).toBe('done');
+      expect(h.counts.pay).toBe(1);
+      expect(h.counts.echo).toBe(1);
+      const calls = await store.toolCalls.listByRun(runId);
+      expect(calls.map((c) => c.status)).toEqual(['executed', 'rejected', 'executed']);
+      expect((await store.budgets.get('run', runId))?.spentUsd).toBeCloseTo(0.7, 6);
+    });
+
+    it('a decision on an approval whose run was halted meanwhile is refused and changes nothing', async () => {
+      const h = await buildHarness(store, { script: [call('wipe', { target: 'x' })] });
+      const agent = await h.createAgent();
+      const runId = await h.createRun(agent);
+      expect((await h.executor.execute(runId)).status).toBe('blocked');
+      const [approval] = await store.approvals.list({ status: 'pending', limit: 10 });
+      if (!approval) throw new Error('no approval');
+      expect(
+        await h.executor.haltRun(runId, 'operator', { by: 'op', detail: 'changed my mind' }),
+      ).toEqual({
+        status: 'halted',
+        reason: 'operator',
+      });
+      const issued = await h.approvals.issueToken(approval.id);
+      if (!issued) throw new Error('no token');
+      expect(await h.approvals.decide(approval.id, issued.token, 'approve', 'op')).toEqual({
+        ok: false,
+        reason: 'run_not_blocked',
+      });
+      expect((await store.approvals.get(approval.id))?.status).toBe('pending');
+      expect((await store.runs.get(runId))?.status).toBe('halted');
+      expect(h.counts.wipe).toBe(0);
+      const halted = (await store.events.listAfter(null, 100)).find((e) => e.type === 'run.halted');
+      expect(halted?.payload).toEqual({ reason: 'operator', by: 'op', detail: 'changed my mind' });
     });
 
     it('irreversible call always creates an approval and blocks the run; the tool does not run', async () => {

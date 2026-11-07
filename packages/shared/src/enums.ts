@@ -36,6 +36,15 @@ export const TOOL_CALL_STATUSES = [
 export const ToolCallStatusSchema = z.enum(TOOL_CALL_STATUSES);
 export type ToolCallStatus = z.infer<typeof ToolCallStatusSchema>;
 
+/**
+ * What an approval decides. `irreversible`: a tool with that blast radius, every time.
+ * `budget`: a costly call that would pass a spend cap; approving allows that one call, the cap
+ * itself never moves.
+ */
+export const APPROVAL_KINDS = ['irreversible', 'budget'] as const;
+export const ApprovalKindSchema = z.enum(APPROVAL_KINDS);
+export type ApprovalKind = z.infer<typeof ApprovalKindSchema>;
+
 export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export const ApprovalStatusSchema = z.enum(APPROVAL_STATUSES);
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;

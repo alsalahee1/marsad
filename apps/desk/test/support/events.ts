@@ -129,6 +129,12 @@ export function makeEvent(id: number | string, type: Event['type'] = 'system.res
       };
     case 'agent.created':
       return { ...bare, type, payload: { agentId: AGENT_ID, name: 'Inventory sync' } };
+    case 'agent.updated':
+      return {
+        ...bare,
+        type,
+        payload: { agentId: AGENT_ID, name: 'Inventory sync', changes: ['enabled', 'tools'] },
+      };
     case 'auth.login':
       return { ...bare, type, payload: { ok: true, ip: '127.0.0.1' } };
   }

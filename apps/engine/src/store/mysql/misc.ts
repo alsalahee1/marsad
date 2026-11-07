@@ -1,7 +1,8 @@
 import type { Agent, BlastRadius } from '@marsad/shared';
-import type { Pool } from 'mysql2/promise';
+import type { Pool, ResultSetHeader } from 'mysql2/promise';
+import { AgentNameConflictError } from '../../errors.js';
 import type { AgentStore, FlagStore, HaltState, ToolSnapshotStore } from '../types.js';
-import { iso, json, num, str, toJson, type Row } from './rows.js';
+import { affected, isDuplicateKey, iso, json, num, str, toJson, type Row } from './rows.js';
 
 export function mysqlToolSnapshotStore(pool: Pool): ToolSnapshotStore {
   return {
@@ -69,10 +70,15 @@ export function mysqlAgentStore(pool: Pool): AgentStore {
   }
   return {
     async create(input, now) {
-      await pool.query(
-        `INSERT INTO agents (id, name, model, system_prompt, tools, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-        [input.id, input.name, input.model, input.systemPrompt, toJson(input.tools), now, now],
-      );
+      try {
+        await pool.query(
+          `INSERT INTO agents (id, name, model, system_prompt, tools, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+          [input.id, input.name, input.model, input.systemPrompt, toJson(input.tools), now, now],
+        );
+      } catch (err) {
+        if (isDuplicateKey(err, 'uq_agents_name')) throw new AgentNameConflictError(input.name);
+        throw err;
+      }
       const a = await getOne(input.id);
       if (!a) throw new Error('agent vanished after insert');
       return a;
@@ -83,6 +89,45 @@ export function mysqlAgentStore(pool: Pool): AgentStore {
         `SELECT ${AGENT_COLUMNS} FROM agents ORDER BY created_at ASC`,
       );
       return rows.map(toAgent);
+    },
+    async update(id, patch, now) {
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      if (patch.name !== undefined) {
+        sets.push('name = ?');
+        params.push(patch.name);
+      }
+      if (patch.model !== undefined) {
+        sets.push('model = ?');
+        params.push(patch.model);
+      }
+      if (patch.systemPrompt !== undefined) {
+        sets.push('system_prompt = ?');
+        params.push(patch.systemPrompt);
+      }
+      if (patch.tools !== undefined) {
+        sets.push('tools = ?');
+        params.push(toJson(patch.tools));
+      }
+      if (patch.enabled !== undefined) {
+        sets.push('enabled = ?');
+        params.push(patch.enabled ? 1 : 0);
+      }
+      if (sets.length === 0) return getOne(id);
+      sets.push('updated_at = ?');
+      params.push(now);
+      try {
+        const [res] = await pool.query<ResultSetHeader>(
+          `UPDATE agents SET ${sets.join(', ')} WHERE id = ?`,
+          [...params, id],
+        );
+        if (affected(res) === 0) return null;
+      } catch (err) {
+        if (isDuplicateKey(err, 'uq_agents_name'))
+          throw new AgentNameConflictError(patch.name ?? '');
+        throw err;
+      }
+      return getOne(id);
     },
   };
 }

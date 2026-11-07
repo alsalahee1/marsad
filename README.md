@@ -94,11 +94,27 @@ A retrying worker that finds an existing row for the same key never re-executes 
 
 ### Approvals
 
+One queue, two kinds of decision (`approvals.kind`, migration `0003`):
+
+- `irreversible` — a tool with that blast radius. Approve ⇒ the call runs once on resume.
+- `budget` — a `costly` call that would pass `BUDGET_PER_RUN_USD`, `BUDGET_PER_DAY_USD` or
+  `BUDGET_PER_DAY_CALLS`. The run pauses (`blocked`), never skips. Approve ⇒ that one call runs
+  past the cap and its spend is recorded in the ledger, so the next over-cap call stops again.
+  The cap itself never moves, and there is no flag that bypasses either path.
+
+Reject ⇒ the call is `rejected` and the run continues with that fact in its history. In both
+cases `run.blockedOn.id` is the approval that resolves the block.
+
 `POST /approvals/:id/token` mints a 256-bit token for a pending approval (only the SHA-256 hash
 is stored, TTL `APPROVAL_TOKEN_TTL_MS`). `POST /approvals/:id/decide { token, decision }`
-consumes it in one guarded UPDATE: pending, hash matches, unused, unexpired. Approve ⇒ the tool
-call becomes `approved`, the run re-queues and the worker executes it exactly once. Reject ⇒
-the call is `rejected` and the run continues with that fact in its history.
+consumes it in one guarded UPDATE: pending, hash matches, unused, unexpired. A decision on an
+approval whose run was halted meanwhile is refused (`run_not_blocked`) and the queue hides it.
+
+### Single-run halt
+
+`POST /runs/:id/halt` moves one `queued`, `running` or `blocked` run to `halted` with reason
+`operator` (event `run.halted` carries `by` and `detail`). A running worker notices at its next
+step gate. Idempotent: halting a halted run returns the same row; a `done` or `failed` run is a 409. The global switch below is for everything at once.
 
 ### Global halt
 
@@ -109,19 +125,27 @@ Runs that were halted stay halted (terminal); re-create them when ready.
 
 ### HTTP surface
 
-| route                                                                       | auth    | purpose                                            |
-| --------------------------------------------------------------------------- | ------- | -------------------------------------------------- |
-| `GET /health`                                                               | none    | MySQL + Redis reachable ⇒ `{ ok: true }`, else 503 |
-| `POST /auth/login`                                                          | none    | argon2id check, 5 attempts / 15 min / IP           |
-| `GET /auth/session`, `POST /auth/logout`                                    | session | session status / clear cookie                      |
-| `GET /system`, `POST /halt`, `POST /resume`                                 | session | global halt                                        |
-| `GET /events?after=&limit=&runId=`                                          | session | event rows after a cursor                          |
-| `GET /events/tail?before=&limit=&runId=`                                    | session | newest rows, ascending; the desk's first page      |
-| `GET /events/stream`                                                        | session | SSE; `Last-Event-ID` (or `?lastEventId=`) replays  |
-| `GET/POST /agents`                                                          | session | agents                                             |
-| `GET/POST /runs`, `GET /runs/:id`                                           | session | runs; POST enqueues                                |
-| `GET /approvals`, `POST /approvals/:id/token`, `POST /approvals/:id/decide` | session | approval queue                                     |
-| `GET /tools`, `GET /budgets/today`                                          | session | registry snapshot, today's spend vs caps           |
+| route                                                     | auth    | purpose                                                                                                   |
+| --------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /health`                                             | none    | MySQL + Redis reachable ⇒ `{ ok: true }`, else 503                                                        |
+| `POST /auth/login`                                        | none    | argon2id check, 5 attempts / 15 min / IP                                                                  |
+| `GET /auth/session`, `POST /auth/logout`                  | session | session status / clear cookie                                                                             |
+| `GET /system`, `POST /halt`, `POST /resume`               | session | global halt                                                                                               |
+| `GET /events?after=&limit=&runId=`                        | session | event rows after a cursor                                                                                 |
+| `GET /events/tail?before=&limit=&runId=`                  | session | newest rows, ascending; the desk's first page                                                             |
+| `GET /events/stream`                                      | session | SSE; `Last-Event-ID` (or `?lastEventId=`) replays                                                         |
+| `GET /agents`                                             | session | roster: every agent with `AgentStats` (active run, runs and spend today)                                  |
+| `POST /agents`, `GET /agents/:id`, `PATCH /agents/:id`    | session | create / detail with recent runs / update or retire (`enabled: false`); never deleted                     |
+| `GET /runs?status=&agentId=&cursor=&limit=`               | session | newest first, keyset pages; `nextCursor` is null on the last page                                         |
+| `POST /runs`, `GET /runs/:id`                             | session | enqueue (409 while halted or agent disabled) / run + agent + tool calls + approvals + budget              |
+| `POST /runs/:id/halt`                                     | session | halt one run (idempotent)                                                                                 |
+| `GET /approvals?status=&limit=`                           | session | queue items: `{ approval, toolCall, run, agent }`; pending ones whose run is no longer blocked are hidden |
+| `POST /approvals/:id/token`, `POST /approvals/:id/decide` | session | single-use token, then the decision                                                                       |
+| `GET /tools`, `GET /budgets/today`                        | session | registry snapshot, today's spend vs caps                                                                  |
+
+Every response body has a zod schema in `@marsad/shared` (`AgentRosterResponseSchema`,
+`RunPageResponseSchema`, `RunDetailResponseSchema`, `ApprovalQueueResponseSchema`, ...); the
+desk validates with them at the boundary. The run timeline is `GET /events/tail?runId=`.
 
 The session is an httpOnly, `SameSite=Strict`, secure-in-production cookie signed with
 `SESSION_SECRET` (stateless HMAC; rotating the secret logs everyone out). Errors are
@@ -185,12 +209,24 @@ ships production dependencies only, and exposes a `/health` healthcheck. `docker
 brings up MySQL 8.0 (with the init SQL), Redis 7, the engine, and a one-shot `migrate` service
 (`docker compose run --rm migrate`).
 
+## Development planner and demo tools
+
+Outside production (`NODE_ENV` other than `production`) the engine boots with `DevPlanner`
+(`apps/engine/src/executor/devPlanner.ts`) and registers three demo tools: `demo.pay` (costly,
+spends what it is told), `demo.wipe` (irreversible, always needs approval) and `demo.fail`
+(always throws). A run's task text selects a fixed script, so every run state can be produced
+on a laptop without a model: `demo:happy`, `demo:approval`, `demo:budget`, `demo:ceiling`,
+`demo:failure`, or `plan:[{"tool":"echo","input":{"message":"hi"}}, ...]`; any other text is
+echoed once. The executor enforces every limit around these exactly as it does for a real
+planner. A production build never registers the demo tools and refuses to run anything until a
+real planner is configured.
+
 ## Extension points
 
 - **Agent loop**: implement `Planner` (`apps/engine/src/executor/planner.ts`) and pass it to
-  the `Executor` in `main.ts` instead of `UnconfiguredPlanner`. The planner only decides; the
-  executor enforces. `ANTHROPIC_API_KEY` / `AGENT_MODEL` are parsed and available on
-  `config.model`.
+  the `Executor` in `main.ts` in place of `DevPlanner` / `UnconfiguredPlanner`. The planner only
+  decides; the executor enforces. `ANTHROPIC_API_KEY` / `AGENT_MODEL` are parsed and available
+  on `config.model`.
 - **Tools**: `defineTool({...})` in `apps/engine/src/tools/builtin/` and register it in
   `registerBuiltinTools`. Declare `blastRadius`; costly tools declare `estimateCostUsd`.
 - **Desk**: consume `@marsad/shared` (`EventSchema` narrows every SSE frame; request schemas

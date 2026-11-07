@@ -1,4 +1,12 @@
-import type { Agent, JsonValue, RunStatus, ToolCall, ToolDefinition } from '@marsad/shared';
+import type {
+  Agent,
+  BudgetSnapshotSchema,
+  JsonValue,
+  RunStatus,
+  ToolCall,
+  ToolDefinition,
+} from '@marsad/shared';
+import type { z } from 'zod';
 import type { Clock } from '../clock.js';
 import { IdempotencyConflictError, errorMessage } from '../errors.js';
 import type { EventBus } from '../events/bus.js';
@@ -281,26 +289,51 @@ export class Executor {
       case 'costly': {
         const reserve = await this.deps.budget.reserve(ctx.runId, estimatedCostUsd, now);
         if (!reserve.ok) {
+          // The cap held. The run pauses on a budget hold the operator can allow once or refuse;
+          // nothing is skipped and nothing here raises the cap.
           const detail = `budget cap exceeded: ${reserve.scope} (${reserve.budget.key})`;
+          const snapshot: z.infer<typeof BudgetSnapshotSchema> = {
+            scope: reserve.budget.scope,
+            key: reserve.budget.key,
+            capUsd: reserve.budget.capUsd,
+            spentUsd: reserve.budget.spentUsd,
+            capCalls: reserve.budget.capCalls,
+            callCount: reserve.budget.callCount,
+          };
+          const approval = await store.approvals.create(
+            { id: ids(), runId: ctx.runId, toolCallId: toolCall.id, kind: 'budget' },
+            now,
+          );
           await store.toolCalls.transition(toolCall.id, ['pending'], 'blocked', now, {
             error: detail,
           });
           await store.runs.transition(ctx.runId, ['running'], 'blocked', now, {
             statusReason: detail,
-            blockedOn: { kind: 'budget', id: reserve.budget.key },
+            blockedOn: { kind: 'budget', id: approval.id },
           });
           await bus.insertEvent({
             type: 'budget.exceeded',
             runId: ctx.runId,
             payload: {
-              scope: reserve.budget.scope,
-              key: reserve.budget.key,
-              capUsd: reserve.budget.capUsd,
-              spentUsd: reserve.budget.spentUsd,
-              capCalls: reserve.budget.capCalls,
-              callCount: reserve.budget.callCount,
+              ...snapshot,
               attemptedUsd: estimatedCostUsd,
               toolCallId: toolCall.id,
+              approvalId: approval.id,
+            },
+          });
+          await bus.insertEvent({
+            type: 'approval.requested',
+            runId: ctx.runId,
+            payload: {
+              approvalId: approval.id,
+              toolCallId: toolCall.id,
+              tool: tool.name,
+              step,
+              input,
+              kind: 'budget',
+              blastRadius: 'costly',
+              estimatedCostUsd,
+              budget: snapshot,
             },
           });
           await bus.insertEvent({
@@ -308,15 +341,9 @@ export class Executor {
             runId: ctx.runId,
             payload: {
               reason: 'budget',
+              approvalId: approval.id,
               toolCallId: toolCall.id,
-              budget: {
-                scope: reserve.budget.scope,
-                key: reserve.budget.key,
-                capUsd: reserve.budget.capUsd,
-                spentUsd: reserve.budget.spentUsd,
-                capCalls: reserve.budget.capCalls,
-                callCount: reserve.budget.callCount,
-              },
+              budget: snapshot,
             },
           });
           return { status: 'blocked', reason: 'budget' };
@@ -327,7 +354,7 @@ export class Executor {
       case 'irreversible': {
         // No configuration is consulted here. Irreversible means the operator decides, every time.
         const approval = await store.approvals.create(
-          { id: ids(), runId: ctx.runId, toolCallId: toolCall.id },
+          { id: ids(), runId: ctx.runId, toolCallId: toolCall.id, kind: 'irreversible' },
           now,
         );
         await store.toolCalls.transition(toolCall.id, ['pending'], 'awaiting_approval', now);
@@ -344,6 +371,8 @@ export class Executor {
             tool: tool.name,
             step,
             input,
+            kind: 'irreversible',
+            blastRadius: 'irreversible',
           },
         });
         await bus.insertEvent({
@@ -367,20 +396,21 @@ export class Executor {
       case 'approved':
         return this.executeCall(ctx, existing, undefined);
       case 'awaiting_approval': {
-        const approvals = await store.approvals.list({ status: 'pending', limit: 1000 });
-        const approval = approvals.find((a) => a.toolCallId === existing.id);
+        const approval = await store.approvals.findPendingByToolCall(existing.id);
         await store.runs.transition(ctx.runId, ['running'], 'blocked', clock(), {
           statusReason: 'awaiting operator approval',
           blockedOn: { kind: 'approval', id: approval?.id ?? null },
         });
         return { status: 'blocked', reason: 'approval' };
       }
-      case 'blocked':
+      case 'blocked': {
+        const approval = await store.approvals.findPendingByToolCall(existing.id);
         await store.runs.transition(ctx.runId, ['running'], 'blocked', clock(), {
           statusReason: existing.error ?? 'budget cap exceeded',
-          blockedOn: { kind: 'budget', id: null },
+          blockedOn: { kind: 'budget', id: approval?.id ?? null },
         });
         return { status: 'blocked', reason: 'budget' };
+      }
       case 'pending':
       case 'executing': {
         const now = clock();
@@ -461,6 +491,9 @@ export class Executor {
       });
       if (actualCostUsd > 0) await store.runs.addCost(ctx.runId, actualCostUsd, finishedAt);
       if (reservation) await budget.settle(reservation, actualCostUsd, finishedAt);
+      // A costly call with no reservation is one the operator allowed past a cap.
+      else if (tool.blastRadius === 'costly')
+        await budget.recordUncapped(ctx.runId, actualCostUsd, finishedAt);
       await bus.insertEvent({
         type: 'tool.completed',
         runId: ctx.runId,
@@ -481,6 +514,8 @@ export class Executor {
         error,
         finishedAt,
       });
+      if (!reservation && tool.blastRadius === 'costly')
+        await budget.recordUncapped(ctx.runId, toolCall.estimatedCostUsd, finishedAt);
       await bus.insertEvent({
         type: 'tool.failed',
         runId: ctx.runId,
@@ -499,7 +534,7 @@ export class Executor {
   async haltRun(
     runId: string,
     reason: 'ceiling.steps' | 'ceiling.tokens' | 'ceiling.wall_clock' | 'system.halt' | 'operator',
-    extra: { limit?: number; value?: number; detail?: string },
+    extra: { limit?: number; value?: number; detail?: string; by?: string },
   ): Promise<RunOutcome> {
     const { store, bus, clock } = this.deps;
     const ok = await store.runs.transition(

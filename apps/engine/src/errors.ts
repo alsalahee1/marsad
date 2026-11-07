@@ -24,6 +24,15 @@ export class IdempotencyConflictError extends Error {
   }
 }
 
+/** Raised by a store when `agents.name` is already taken. */
+export class AgentNameConflictError extends Error {
+  override readonly name = 'AgentNameConflictError';
+
+  constructor(readonly agentName: string) {
+    super(`an agent named ${JSON.stringify(agentName)} already exists`);
+  }
+}
+
 export function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);

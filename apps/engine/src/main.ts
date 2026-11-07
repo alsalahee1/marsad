@@ -8,14 +8,16 @@ import { createEventBus } from './events/bus.js';
 import { ApprovalService } from './executor/approvals.js';
 import { BudgetGuard } from './executor/budget.js';
 import { Executor } from './executor/executor.js';
+import { DevPlanner } from './executor/devPlanner.js';
 import { HaltController } from './executor/halt.js';
-import { UnconfiguredPlanner } from './executor/planner.js';
+import { UnconfiguredPlanner, type Planner } from './executor/planner.js';
 import { createApp } from './http/app.js';
 import { loadDotenv } from './env.js';
 import { createLogger } from './logger.js';
 import { RunQueue, createRedis, createRunWorker } from './queue/queue.js';
 import { createMysqlStore } from './store/mysql/index.js';
 import { registerBuiltinTools } from './tools/builtin/index.js';
+import { registerDevTools } from './tools/dev/index.js';
 import { ToolRegistry } from './tools/registry.js';
 
 loadDotenv();
@@ -45,8 +47,11 @@ await store.ping();
 const bus = createEventBus(store.events, clock, log);
 
 // 3. Tool registry: a tool without a blast radius throws here and the process never listens.
+//    Demo tools and the scripted planner exist only outside production; a production build
+//    without a configured planner refuses to run anything rather than pretend.
 const registry = new ToolRegistry();
 registerBuiltinTools(registry);
+if (!config.isProduction) registerDevTools(registry);
 await store.tools.snapshot(registry.definitions(), clock());
 await bus.insertEvent({
   type: 'tools.snapshotted',
@@ -59,11 +64,18 @@ const queue = new RunQueue(redis);
 const halt = new HaltController({ store, bus, queue, clock, log });
 await halt.syncOnBoot();
 
+const planner: Planner = config.isProduction ? new UnconfiguredPlanner() : new DevPlanner();
+if (!config.isProduction) {
+  log.warn(
+    'development planner active: run tasks are read as demo plans (apps/engine/src/executor/devPlanner.ts)',
+  );
+}
+
 const executor = new Executor({
   store,
   bus,
   registry,
-  planner: new UnconfiguredPlanner(),
+  planner,
   budget: new BudgetGuard(store.budgets, config.budget),
   halt,
   ceilings: config.ceilings,
@@ -86,6 +98,7 @@ const app = createApp({
   store,
   bus,
   halt,
+  executor,
   approvals,
   dispatcher: queue,
   registry,

@@ -4,6 +4,7 @@ import { IdempotencyConflictError } from '../../errors.js';
 import type { ToolCallPatch, ToolCallStore } from '../types.js';
 import {
   affected,
+  isDuplicateKey,
   iso,
   isoOrNull,
   json,
@@ -37,15 +38,6 @@ function toToolCall(row: Row): ToolCall {
     startedAt: isoOrNull(row['started_at']),
     finishedAt: isoOrNull(row['finished_at']),
   };
-}
-
-function isDuplicateKey(err: unknown, index: string): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as { code?: string }).code === 'ER_DUP_ENTRY' &&
-    String((err as { message?: string }).message).includes(index)
-  );
 }
 
 export function mysqlToolCallStore(pool: Pool): ToolCallStore {

@@ -2,23 +2,26 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import type { Express } from 'express';
-import request from 'supertest';
+import request, { type Response as SupertestResponse } from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { StepDecision } from '../../src/executor/planner.js';
 import { createApp } from '../../src/http/app.js';
 import { SESSION_COOKIE } from '../../src/http/session.js';
-import { buildHarness, TEST_PASSWORD, type Harness } from '../support/fixtures.js';
+import { buildHarness, call, TEST_PASSWORD, type Harness } from '../support/fixtures.js';
 import { createMemoryStore } from '../support/memoryStore.js';
 
 async function appWith(
   env: Record<string, string | undefined> = {},
+  script: StepDecision[] = [],
 ): Promise<{ app: Express; h: Harness }> {
   const store = createMemoryStore();
-  const h = await buildHarness(store, { env });
+  const h = await buildHarness(store, { env, script });
   const app = createApp({
     config: h.config,
     store,
     bus: h.bus,
     halt: h.halt,
+    executor: h.executor,
     approvals: h.approvals,
     dispatcher: h.queue,
     registry: h.registry,
@@ -200,6 +203,284 @@ describe('halt and resume', () => {
     expect(h.queue.paused).toBe(false);
     expect(await h.halt.isHalted()).toBe(false);
     expect((await h.eventTypes()).at(-1)).toBe('system.resumed');
+  });
+});
+
+describe('agents', () => {
+  it('creates with stats, refuses a taken name and unknown tools, patches, and retires', async () => {
+    const { app, h } = await appWith();
+    const cookie = await login(app);
+    const created = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'ops', model: 'm', tools: ['echo'] });
+    expect(created.status).toBe(201);
+    const id: string = created.body.agent.id;
+    expect(created.body.stats).toEqual({
+      agentId: id,
+      activeRun: null,
+      runsToday: 0,
+      spentTodayUsd: 0,
+      lastRunAt: null,
+    });
+    expect(created.body.recentRuns).toEqual([]);
+
+    const dup = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'ops', model: 'm' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe('name_taken');
+
+    const unknownTool = await request(app)
+      .patch(`/agents/${id}`)
+      .set('Cookie', cookie)
+      .send({ tools: ['nope'] });
+    expect(unknownTool.status).toBe(400);
+    expect(unknownTool.body.error.code).toBe('unknown_tool');
+    const empty = await request(app).patch(`/agents/${id}`).set('Cookie', cookie).send({});
+    expect(empty.status).toBe(400);
+    const missing = await request(app)
+      .patch('/agents/00000000-0000-4000-8000-000000000000')
+      .set('Cookie', cookie)
+      .send({ enabled: false });
+    expect(missing.status).toBe(404);
+
+    const patched = await request(app)
+      .patch(`/agents/${id}`)
+      .set('Cookie', cookie)
+      .send({ enabled: false, tools: ['echo', 'pay'] });
+    expect(patched.status).toBe(200);
+    expect(patched.body.agent.enabled).toBe(false);
+    expect(patched.body.agent.tools).toEqual(['echo', 'pay']);
+
+    const list = await request(app).get('/agents').set('Cookie', cookie);
+    expect(list.body.agents).toHaveLength(1);
+    expect(list.body.agents[0].agent.enabled).toBe(false);
+    expect(list.body.agents[0].stats.agentId).toBe(id);
+
+    const run = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: id, task: 'go' });
+    expect(run.status).toBe(409);
+    expect(run.body.error.code).toBe('agent_disabled');
+
+    const events = await h.store.events.listAfter(null, 100);
+    const updated = events.find((e) => e.type === 'agent.updated');
+    expect(updated?.payload).toEqual({ agentId: id, name: 'ops', changes: ['enabled', 'tools'] });
+  });
+});
+
+describe('runs', () => {
+  it('pages newest first with a cursor and filters by agent', async () => {
+    const { app, h } = await appWith();
+    const cookie = await login(app);
+    const agent = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'a', model: 'm', tools: ['echo'] });
+    const other = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'b', model: 'm', tools: ['echo'] });
+    const created: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      h.clock.advance(1000);
+      const res = await request(app)
+        .post('/runs')
+        .set('Cookie', cookie)
+        .send({ agentId: agent.body.agent.id, task: `task ${i}` });
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ toolCalls: [], approvals: [], budget: null });
+      created.push(res.body.run.id);
+    }
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const url = `/runs?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      // Annotated to break the inference cycle url -> cursor -> page -> url.
+      const page: SupertestResponse = await request(app).get(url).set('Cookie', cookie);
+      expect(page.status).toBe(200);
+      seen.push(...page.body.runs.map((r: { id: string }) => r.id));
+      cursor = page.body.nextCursor;
+      if (cursor === null) break;
+    }
+    expect(seen).toEqual([...created].reverse());
+    const none = await request(app)
+      .get(`/runs?agentId=${other.body.agent.id}`)
+      .set('Cookie', cookie);
+    expect(none.body).toEqual({ runs: [], nextCursor: null });
+    const bad = await request(app).get('/runs?cursor=garbage').set('Cookie', cookie);
+    expect(bad.status).toBe(400);
+
+    const roster = await request(app).get('/agents').set('Cookie', cookie);
+    const row = roster.body.agents.find(
+      (r: { agent: { id: string } }) => r.agent.id === agent.body.agent.id,
+    );
+    expect(row.stats.runsToday).toBe(5);
+    expect(row.stats.activeRun).toEqual({ id: created[4], status: 'queued' });
+  });
+
+  it('halts one run idempotently and refuses a finished one', async () => {
+    const { app, h } = await appWith({}, [call('echo', { message: 'x' })]);
+    const cookie = await login(app);
+    const agent = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'a', model: 'm', tools: ['echo'] });
+    const queued = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: agent.body.agent.id, task: 'wait' });
+    const runId: string = queued.body.run.id;
+
+    const halted = await request(app)
+      .post(`/runs/${runId}/halt`)
+      .set('Cookie', cookie)
+      .send({ reason: 'oops' });
+    expect(halted.status).toBe(200);
+    expect(halted.body.run).toMatchObject({
+      id: runId,
+      status: 'halted',
+      statusReason: 'operator',
+    });
+    const again = await request(app).post(`/runs/${runId}/halt`).set('Cookie', cookie).send({});
+    expect(again.status).toBe(200);
+    expect(again.body.run.status).toBe('halted');
+    const haltEvents = (await h.store.events.listAfter(null, 100)).filter(
+      (e) => e.type === 'run.halted',
+    );
+    expect(haltEvents).toHaveLength(1);
+    expect(haltEvents[0]?.payload).toEqual({ reason: 'operator', by: 'operator', detail: 'oops' });
+
+    const second = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: agent.body.agent.id, task: 'finish' });
+    expect((await h.executor.execute(second.body.run.id)).status).toBe('done');
+    const finished = await request(app)
+      .post(`/runs/${second.body.run.id}/halt`)
+      .set('Cookie', cookie)
+      .send({});
+    expect(finished.status).toBe(409);
+    expect(finished.body.error.code).toBe('run_finished');
+    expect(
+      (
+        await request(app)
+          .post('/runs/00000000-0000-4000-8000-000000000000/halt')
+          .set('Cookie', cookie)
+          .send({})
+      ).status,
+    ).toBe(404);
+  });
+
+  it('refuses to start a run while the system is halted', async () => {
+    const { app } = await appWith();
+    const cookie = await login(app);
+    const agent = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'a', model: 'm', tools: ['echo'] });
+    await request(app).post('/halt').set('Cookie', cookie).send({});
+    const res = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: agent.body.agent.id, task: 'go' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('system_halted');
+  });
+});
+
+describe('approval queue', () => {
+  it('lists a budget hold with its call, run and agent, then decides it', async () => {
+    const { app, h } = await appWith({}, [
+      call('pay', { usd: 0.7 }),
+      call('pay', { usd: 0.7 }),
+      call('echo', { message: 'end' }),
+    ]);
+    const cookie = await login(app);
+    const agent = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'spender', model: 'm', tools: ['echo', 'pay'] });
+    const created = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: agent.body.agent.id, task: 'spend' });
+    const runId: string = created.body.run.id;
+    expect(await h.executor.execute(runId)).toEqual({ status: 'blocked', reason: 'budget' });
+
+    const queue = await request(app).get('/approvals?status=pending').set('Cookie', cookie);
+    expect(queue.status).toBe(200);
+    expect(queue.body.approvals).toHaveLength(1);
+    const item = queue.body.approvals[0];
+    expect(item.approval).toMatchObject({ kind: 'budget', status: 'pending', runId });
+    expect(item.toolCall).toMatchObject({ tool: 'pay', status: 'blocked', estimatedCostUsd: 0.7 });
+    expect(item.run).toMatchObject({
+      id: runId,
+      status: 'blocked',
+      blockedOn: { kind: 'budget', id: item.approval.id },
+    });
+    expect(item.agent).toMatchObject({ id: agent.body.agent.id, name: 'spender' });
+
+    const detail = await request(app).get(`/runs/${runId}`).set('Cookie', cookie);
+    expect(detail.body.approvals).toHaveLength(1);
+    expect(detail.body.budget).toMatchObject({ scope: 'run', key: runId });
+    expect(detail.body.agent.name).toBe('spender');
+
+    const token = await request(app)
+      .post(`/approvals/${item.approval.id}/token`)
+      .set('Cookie', cookie);
+    expect(token.status).toBe(200);
+    const decided = await request(app)
+      .post(`/approvals/${item.approval.id}/decide`)
+      .set('Cookie', cookie)
+      .send({ token: token.body.token, decision: 'approve' });
+    expect(decided.status).toBe(200);
+    expect(decided.body).toMatchObject({
+      approval: { status: 'approved', kind: 'budget' },
+      resumed: true,
+    });
+    expect(
+      (await request(app).get('/approvals?status=pending').set('Cookie', cookie)).body.approvals,
+    ).toEqual([]);
+    const all = await request(app).get('/approvals').set('Cookie', cookie);
+    expect(all.body.approvals).toHaveLength(1);
+  });
+
+  it('hides a pending approval whose run was halted and refuses to decide it', async () => {
+    const { app, h } = await appWith({}, [call('wipe', { target: 'prod' })]);
+    const cookie = await login(app);
+    const agent = await request(app)
+      .post('/agents')
+      .set('Cookie', cookie)
+      .send({ name: 'wiper', model: 'm', tools: ['wipe'] });
+    const created = await request(app)
+      .post('/runs')
+      .set('Cookie', cookie)
+      .send({ agentId: agent.body.agent.id, task: 'wipe it' });
+    const runId: string = created.body.run.id;
+    expect(await h.executor.execute(runId)).toEqual({ status: 'blocked', reason: 'approval' });
+    const before = await request(app).get('/approvals?status=pending').set('Cookie', cookie);
+    expect(before.body.approvals).toHaveLength(1);
+    expect(before.body.approvals[0].approval.kind).toBe('irreversible');
+    const approvalId: string = before.body.approvals[0].approval.id;
+    const token = await request(app).post(`/approvals/${approvalId}/token`).set('Cookie', cookie);
+
+    expect(
+      (await request(app).post(`/runs/${runId}/halt`).set('Cookie', cookie).send({})).status,
+    ).toBe(200);
+    expect(
+      (await request(app).get('/approvals?status=pending').set('Cookie', cookie)).body.approvals,
+    ).toEqual([]);
+    const decided = await request(app)
+      .post(`/approvals/${approvalId}/decide`)
+      .set('Cookie', cookie)
+      .send({ token: token.body.token, decision: 'approve' });
+    expect(decided.status).toBe(409);
+    expect(decided.body.error.code).toBe('run_not_blocked');
+    expect(h.counts.wipe).toBe(0);
   });
 });
 

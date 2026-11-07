@@ -46,6 +46,23 @@ export function mysqlBudgetStore(pool: Pool): BudgetStore {
       return affected(res) === 1 ? { ok: true, budget } : { ok: false, budget };
     },
 
+    async record(scope, key, amountUsd, caps, now) {
+      await pool.query(
+        `INSERT INTO budgets (scope, scope_key, spent_usd, call_count, cap_usd, cap_calls, created_at, updated_at)
+         VALUES (?, ?, 0, 0, ?, ?, ?, ?) AS new
+         ON DUPLICATE KEY UPDATE cap_usd = new.cap_usd, cap_calls = new.cap_calls`,
+        [scope, key, caps.capUsd, caps.capCalls, now, now],
+      );
+      await pool.query(
+        `UPDATE budgets SET spent_usd = spent_usd + ?, call_count = call_count + 1, updated_at = ?
+         WHERE scope = ? AND scope_key = ?`,
+        [amountUsd, now, scope, key],
+      );
+      const budget = await getOne(scope, key);
+      if (!budget) throw new Error('budget row vanished');
+      return budget;
+    },
+
     async adjust(scope, key, deltaUsd, now) {
       await pool.query(
         'UPDATE budgets SET spent_usd = GREATEST(0, spent_usd + ?), updated_at = ? WHERE scope = ? AND scope_key = ?',

@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentStats,
   Approval,
   Budget,
   BudgetScope,
@@ -10,7 +11,7 @@ import type {
   ToolCallStatus,
   ToolDefinition,
 } from '@marsad/shared';
-import { IdempotencyConflictError } from '../../src/errors.js';
+import { AgentNameConflictError, IdempotencyConflictError } from '../../src/errors.js';
 import type { HaltState, RunPatch, Store, ToolCallPatch } from '../../src/store/types.js';
 
 /**
@@ -122,11 +123,44 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
         return structuredClone(rest);
       },
       async list(filter) {
+        const before = filter.before;
         return [...runs.values()]
           .filter((r) => !filter.status || r.status === filter.status)
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .filter((r) => filter.agentId === undefined || r.agentId === filter.agentId)
+          .filter(
+            (r) =>
+              before === undefined ||
+              r.createdAt < before.createdAt ||
+              (r.createdAt === before.createdAt && r.id < before.id),
+          )
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
           .slice(0, filter.limit)
           .map(({ claimedAt: _c, ...rest }) => structuredClone(rest));
+      },
+      async agentStats(since) {
+        const byAgent = new Map<string, AgentStats>();
+        const sorted = [...runs.values()].sort(
+          (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+        );
+        for (const r of sorted) {
+          const stats = byAgent.get(r.agentId) ?? {
+            agentId: r.agentId,
+            activeRun: null,
+            runsToday: 0,
+            spentTodayUsd: 0,
+            lastRunAt: null,
+          };
+          if (!TERMINAL.includes(r.status) && stats.activeRun === null)
+            stats.activeRun = { id: r.id, status: r.status };
+          if (new Date(r.createdAt).getTime() >= since.getTime()) {
+            stats.runsToday += 1;
+            stats.spentTodayUsd += r.costUsd;
+          }
+          if (stats.lastRunAt === null || r.createdAt > stats.lastRunAt)
+            stats.lastRunAt = r.createdAt;
+          byAgent.set(r.agentId, stats);
+        }
+        return [...byAgent.values()];
       },
       async transition(id, from, to, now, patch) {
         const run = runs.get(id);
@@ -236,6 +270,7 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
           id: input.id,
           runId: input.runId,
           toolCallId: input.toolCallId,
+          kind: input.kind,
           status: 'pending' as const,
           tokenExpiresAt: null,
           decidedAt: null,
@@ -260,6 +295,21 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
           .slice(0, filter.limit)
           .map(({ tokenHash: _h, tokenUsedAt: _u, ...pub }) => structuredClone(pub));
+      },
+      async listByRun(runId) {
+        return [...approvals.values()]
+          .filter((a) => a.runId === runId)
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map(({ tokenHash: _h, tokenUsedAt: _u, ...pub }) => structuredClone(pub));
+      },
+      async findPendingByToolCall(toolCallId) {
+        for (const a of approvals.values()) {
+          if (a.toolCallId === toolCallId && a.status === 'pending') {
+            const { tokenHash: _h, tokenUsedAt: _u, ...pub } = a;
+            return structuredClone(pub);
+          }
+        }
+        return null;
       },
       async setToken(id, tokenHash, expiresAt) {
         const a = approvals.get(id);
@@ -316,6 +366,25 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
         row.spentUsd = Math.max(0, row.spentUsd + deltaUsd);
         row.updatedAt = now.toISOString();
       },
+      async record(scope, key, amountUsd, caps, now) {
+        const k = `${scope}:${key}`;
+        const row = budgets.get(k) ?? {
+          scope,
+          key,
+          spentUsd: 0,
+          callCount: 0,
+          capUsd: caps.capUsd,
+          capCalls: caps.capCalls,
+          updatedAt: now.toISOString(),
+        };
+        row.capUsd = caps.capUsd;
+        row.capCalls = caps.capCalls;
+        row.spentUsd += amountUsd;
+        row.callCount += 1;
+        row.updatedAt = now.toISOString();
+        budgets.set(k, row);
+        return structuredClone(row);
+      },
       async get(scope: BudgetScope, key: string) {
         const row = budgets.get(`${scope}:${key}`);
         return row ? structuredClone(row) : null;
@@ -334,6 +403,8 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
 
     agents: {
       async create(input, now) {
+        for (const existing of agents.values())
+          if (existing.name === input.name) throw new AgentNameConflictError(input.name);
         const a: Agent = {
           id: input.id,
           name: input.name,
@@ -353,6 +424,22 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
       },
       async list() {
         return [...agents.values()].map((a) => structuredClone(a));
+      },
+      async update(id, patch, now) {
+        const a = agents.get(id);
+        if (!a) return null;
+        if (patch.name !== undefined) {
+          for (const other of agents.values())
+            if (other.id !== id && other.name === patch.name)
+              throw new AgentNameConflictError(patch.name);
+          a.name = patch.name;
+        }
+        if (patch.model !== undefined) a.model = patch.model;
+        if (patch.systemPrompt !== undefined) a.systemPrompt = patch.systemPrompt;
+        if (patch.tools !== undefined) a.tools = [...patch.tools];
+        if (patch.enabled !== undefined) a.enabled = patch.enabled;
+        a.updatedAt = now.toISOString();
+        return structuredClone(a);
       },
     },
 

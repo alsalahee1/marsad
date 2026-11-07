@@ -55,3 +55,13 @@ export function toJson(value: unknown): string {
 export function affected(result: ResultSetHeader): number {
   return result.affectedRows;
 }
+
+/** True when `err` is MySQL's ER_DUP_ENTRY for the named UNIQUE index. */
+export function isDuplicateKey(err: unknown, index: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: string }).code === 'ER_DUP_ENTRY' &&
+    String((err as { message?: string }).message).includes(index)
+  );
+}

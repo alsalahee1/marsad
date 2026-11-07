@@ -1,7 +1,9 @@
 import type {
   Agent,
+  AgentStats,
   Approval,
   ApprovalDecision,
+  ApprovalKind,
   BlastRadius,
   BlockReason,
   Budget,
@@ -10,6 +12,7 @@ import type {
   EventInput,
   JsonValue,
   Run,
+  RunCursor,
   RunStatus,
   ToolCall,
   ToolCallStatus,
@@ -50,10 +53,21 @@ export interface RunPatch {
   output?: JsonValue | null;
 }
 
+export interface RunListFilter {
+  status?: RunStatus;
+  agentId?: string;
+  /** Only rows strictly older than this (created_at, id) pair: the previous page's last row. */
+  before?: RunCursor;
+  limit: number;
+}
+
 export interface RunStore {
   create(input: NewRun, now: Date): Promise<Run>;
   get(id: string): Promise<Run | null>;
-  list(filter: { status?: RunStatus; limit: number }): Promise<Run[]>;
+  /** Newest first, keyed on (created_at, id). */
+  list(filter: RunListFilter): Promise<Run[]>;
+  /** Roster figures for every agent with at least one run. `since` is the start of the UTC day. */
+  agentStats(since: Date): Promise<AgentStats[]>;
   /**
    * Move a run from one of `from` to `to`. Entering `running` stamps claimed_at (and started_at
    * on first claim); leaving `running` folds the elapsed time into active_ms.
@@ -117,10 +131,20 @@ export interface ToolCallStore {
   ): Promise<boolean>;
 }
 
+export interface NewApproval {
+  id: string;
+  runId: string;
+  toolCallId: string;
+  kind: ApprovalKind;
+}
+
 export interface ApprovalStore {
-  create(input: { id: string; runId: string; toolCallId: string }, now: Date): Promise<Approval>;
+  create(input: NewApproval, now: Date): Promise<Approval>;
   get(id: string): Promise<Approval | null>;
   list(filter: { status?: Approval['status']; limit: number }): Promise<Approval[]>;
+  listByRun(runId: string): Promise<Approval[]>;
+  /** The pending approval for a tool call, if one exists (there is at most one per call). */
+  findPendingByToolCall(toolCallId: string): Promise<Approval | null>;
   /** Store a fresh token hash on a pending approval, replacing any previous one. */
   setToken(id: string, tokenHash: string, expiresAt: Date, now: Date): Promise<boolean>;
   /**
@@ -157,6 +181,17 @@ export interface BudgetStore {
   ): Promise<ReserveResult>;
   /** Replace a reservation with the actual spend (delta may be negative). Never touches call_count. */
   adjust(scope: BudgetScope, key: string, deltaUsd: number, now: Date): Promise<void>;
+  /**
+   * Unconditional spend and one call: the operator allowed this call past the cap. The ledger
+   * stays truthful, which is also what makes the next over-cap call stop again.
+   */
+  record(
+    scope: BudgetScope,
+    key: string,
+    amountUsd: number,
+    caps: BudgetCaps,
+    now: Date,
+  ): Promise<Budget>;
   get(scope: BudgetScope, key: string): Promise<Budget | null>;
 }
 
@@ -174,10 +209,21 @@ export interface NewAgent {
   tools: string[];
 }
 
+export interface AgentPatch {
+  name?: string | undefined;
+  model?: string | undefined;
+  systemPrompt?: string | undefined;
+  tools?: string[] | undefined;
+  enabled?: boolean | undefined;
+}
+
 export interface AgentStore {
+  /** Throws AgentNameConflictError when the name is taken. */
   create(input: NewAgent, now: Date): Promise<Agent>;
   get(id: string): Promise<Agent | null>;
   list(): Promise<Agent[]>;
+  /** Agents are never deleted. Returns null when the id is unknown; throws on a taken name. */
+  update(id: string, patch: AgentPatch, now: Date): Promise<Agent | null>;
 }
 
 export interface HaltState {

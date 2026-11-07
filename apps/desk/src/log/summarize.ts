@@ -117,18 +117,37 @@ export function summarize(event: Event): Segment[] {
         t(truncate(event.payload.error, 100)),
       ];
     case 'approval.requested':
-      return [
-        t(`Approval needed: ${event.payload.tool} at step `),
-        n(String(event.payload.step)),
-        t(' · '),
-        t(json(event.payload.input, 60)),
-      ];
+      return event.payload.kind === 'budget'
+        ? [
+            t(`Budget hold: ${event.payload.tool} at step `),
+            n(String(event.payload.step)),
+            ...(event.payload.estimatedCostUsd !== undefined
+              ? [t(' · est. '), n(formatUsd(event.payload.estimatedCostUsd))]
+              : []),
+            ...(event.payload.budget
+              ? [
+                  t(' · '),
+                  n(formatUsd(event.payload.budget.spentUsd)),
+                  t(' of '),
+                  n(formatUsd(event.payload.budget.capUsd)),
+                  t(` per ${event.payload.budget.scope}`),
+                ]
+              : []),
+          ]
+        : [
+            t(`Approval needed: ${event.payload.tool} at step `),
+            n(String(event.payload.step)),
+            t(' · '),
+            t(json(event.payload.input, 60)),
+          ];
     case 'approval.token_issued':
       return [t('Approval token issued for '), n(shortId(event.payload.approvalId))];
     case 'approval.decided':
       return [
         t(
-          `${event.payload.decision === 'approve' ? 'Approved' : 'Rejected'} by ${event.payload.decidedBy}`,
+          `${event.payload.decision === 'approve' ? 'Approved' : 'Rejected'}${
+            event.payload.kind === 'budget' ? ' past the cap, once,' : ''
+          } by ${event.payload.decidedBy}`,
         ),
       ];
     case 'budget.exceeded':
@@ -155,6 +174,8 @@ export function summarize(event: Event): Segment[] {
       return [t('Tool registry snapshotted: '), n(String(event.payload.tools.length)), t(' tools')];
     case 'agent.created':
       return [t(`Agent ${event.payload.name} created`)];
+    case 'agent.updated':
+      return [t(`Agent ${event.payload.name} updated: ${event.payload.changes.join(', ')}`)];
     case 'auth.login':
       return [
         t(
@@ -211,11 +232,15 @@ export function blastRadiusOf(event: Event): BlastRadius | null {
   switch (event.type) {
     case 'tool.requested':
       return event.payload.blastRadius;
+    case 'budget.exceeded':
+      return 'costly';
     case 'approval.requested':
-    case 'approval.token_issued':
     case 'approval.decided':
-      // Only irreversible tools ever enter the approval queue.
-      return 'irreversible';
+      // Irreversible tools and costly calls held by a cap share the queue; rows written before
+      // budget holds existed carry no kind and were all irreversible.
+      return event.payload.kind === 'budget' ? 'costly' : 'irreversible';
+    case 'approval.token_issued':
+      return null;
     default:
       return null;
   }

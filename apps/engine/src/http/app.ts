@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 import type { EventBus } from '../events/bus.js';
 import type { ApprovalService } from '../executor/approvals.js';
 import type { RunDispatcher } from '../executor/dispatcher.js';
+import type { Executor } from '../executor/executor.js';
 import type { HaltController } from '../executor/halt.js';
 import type { Logger } from '../logger.js';
 import type { Store } from '../store/types.js';
@@ -18,6 +19,8 @@ export interface AppDeps {
   store: Store;
   bus: EventBus;
   halt: HaltController;
+  /** Single-run halt goes through the executor so it is the same transition the worker makes. */
+  executor: Pick<Executor, 'haltRun'>;
   approvals: ApprovalService;
   dispatcher: RunDispatcher;
   registry: ToolRegistry;
@@ -46,7 +49,7 @@ export function createApp(deps: AppDeps): Express {
         cb(null, origin !== undefined && config.corsOrigins.includes(origin) ? origin : false);
       },
       credentials: true,
-      methods: ['GET', 'POST'],
+      methods: ['GET', 'POST', 'PATCH'],
       allowedHeaders: ['Content-Type', 'Last-Event-ID'],
       maxAge: 600,
     }),

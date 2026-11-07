@@ -52,6 +52,29 @@ export class BudgetGuard {
     return { ok: true, reservation: { runId, day, amountUsd } };
   }
 
+  /**
+   * Spend the operator explicitly allowed past a cap (an approved budget hold). Recorded in both
+   * scopes without a check, so the ledger shows the true total and the next over-cap call
+   * stops again.
+   */
+  async recordUncapped(runId: string, amountUsd: number, now: Date): Promise<void> {
+    const day = utcDay(now);
+    await this.store.record(
+      'run',
+      runId,
+      amountUsd,
+      { capUsd: this.caps.perRunUsd, capCalls: null },
+      now,
+    );
+    await this.store.record(
+      'day',
+      day,
+      amountUsd,
+      { capUsd: this.caps.perDayUsd, capCalls: this.caps.perDayCalls },
+      now,
+    );
+  }
+
   /** Replace the estimate with the actual spend in both scopes. */
   async settle(reservation: BudgetReservation, actualUsd: number, now: Date): Promise<void> {
     const delta = actualUsd - reservation.amountUsd;

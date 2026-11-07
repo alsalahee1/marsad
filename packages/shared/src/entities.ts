@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ApprovalKindSchema,
   ApprovalStatusSchema,
   BlastRadiusSchema,
   BlockReasonSchema,
@@ -35,7 +36,7 @@ export type Agent = z.infer<typeof AgentSchema>;
 
 export const RunBlockedOnSchema = z.object({
   kind: BlockReasonSchema,
-  /** Approval id for `approval`; the budget key (run id or YYYY-MM-DD) for `budget`. */
+  /** The approval that resolves the block, for both kinds. Null only for a legacy row. */
   id: z.string().nullable(),
 });
 export type RunBlockedOn = z.infer<typeof RunBlockedOnSchema>;
@@ -87,6 +88,7 @@ export const ApprovalSchema = z.object({
   id: Id,
   runId: Id,
   toolCallId: Id,
+  kind: ApprovalKindSchema,
   status: ApprovalStatusSchema,
   tokenExpiresAt: Timestamp.nullable(),
   decidedAt: Timestamp.nullable(),
@@ -106,6 +108,17 @@ export const BudgetSchema = z.object({
   updatedAt: Timestamp,
 });
 export type Budget = z.infer<typeof BudgetSchema>;
+
+/** Per-agent figures for the roster. "Today" is the current UTC day, computed by the engine. */
+export const AgentStatsSchema = z.object({
+  agentId: Id,
+  /** The most recent run that is not finished, if any. */
+  activeRun: z.object({ id: Id, status: RunStatusSchema }).nullable(),
+  runsToday: Count,
+  spentTodayUsd: Usd,
+  lastRunAt: Timestamp.nullable(),
+});
+export type AgentStats = z.infer<typeof AgentStatsSchema>;
 
 /** Registry snapshot row. `inputSchema` is JSON Schema derived from the tool's zod input. */
 export const ToolDefinitionSchema = z.object({

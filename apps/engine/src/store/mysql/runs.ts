@@ -1,4 +1,4 @@
-import type { Run, RunStatus } from '@marsad/shared';
+import type { AgentStats, Run, RunStatus } from '@marsad/shared';
 import type { Pool, ResultSetHeader } from 'mysql2/promise';
 import type { RunPatch, RunStore } from '../types.js';
 import {
@@ -117,18 +117,61 @@ export function mysqlRunStore(pool: Pool): RunStore {
     get: getRun,
 
     async list(filter) {
+      const where: string[] = [];
       const params: unknown[] = [];
-      let where = '';
       if (filter.status) {
-        where = 'WHERE status = ?';
+        where.push('status = ?');
         params.push(filter.status);
+      }
+      if (filter.agentId !== undefined) {
+        where.push('agent_id = ?');
+        params.push(filter.agentId);
+      }
+      if (filter.before) {
+        const at = new Date(filter.before.createdAt);
+        where.push('(created_at < ? OR (created_at = ? AND id < ?))');
+        params.push(at, at, filter.before.id);
       }
       params.push(filter.limit);
       const [rows] = await pool.query<Row[]>(
-        `SELECT ${COLUMNS} FROM runs ${where} ORDER BY created_at DESC, id DESC LIMIT ?`,
+        `SELECT ${COLUMNS} FROM runs
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY created_at DESC, id DESC LIMIT ?`,
         params,
       );
       return rows.map(toRun);
+    },
+
+    async agentStats(since) {
+      const [totals] = await pool.query<Row[]>(
+        `SELECT agent_id,
+                COALESCE(SUM(created_at >= ?), 0) AS runs_today,
+                COALESCE(SUM(IF(created_at >= ?, cost_usd, 0)), 0) AS spent_today_usd,
+                MAX(created_at) AS last_run_at
+           FROM runs GROUP BY agent_id`,
+        [since, since],
+      );
+      const [active] = await pool.query<Row[]>(
+        `SELECT id, agent_id, status FROM runs
+          WHERE status IN ('queued', 'running', 'blocked')
+          ORDER BY created_at DESC, id DESC`,
+      );
+      const activeByAgent = new Map<string, { id: string; status: RunStatus }>();
+      for (const r of active) {
+        const agentId = str(r['agent_id']);
+        if (!activeByAgent.has(agentId))
+          activeByAgent.set(agentId, { id: str(r['id']), status: str(r['status']) as RunStatus });
+      }
+      return totals.map((r): AgentStats => {
+        const agentId = str(r['agent_id']);
+        return {
+          agentId,
+          activeRun: activeByAgent.get(agentId) ?? null,
+          runsToday: num(r['runs_today']),
+          spentTodayUsd: num(r['spent_today_usd']),
+          lastRunAt: isoOrNull(r['last_run_at']),
+        };
+      });
     },
 
     async transition(id, from, to, now, patch) {

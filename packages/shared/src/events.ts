@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ApprovalDecisionSchema,
+  ApprovalKindSchema,
   BlastRadiusSchema,
   BlockReasonSchema,
   BudgetScopeSchema,
@@ -73,6 +74,8 @@ export const EventSchema = z.discriminatedUnion('type', [
       limit: z.number().optional(),
       value: z.number().optional(),
       detail: z.string().optional(),
+      /** Who pulled the switch, for `operator` halts. */
+      by: z.string().optional(),
     }),
   ),
 
@@ -118,6 +121,12 @@ export const EventSchema = z.discriminatedUnion('type', [
       tool: ToolNameSchema,
       step: Count,
       input: JsonValueSchema,
+      /** Absent on rows written before budget holds existed: those are all `irreversible`. */
+      kind: ApprovalKindSchema.optional(),
+      blastRadius: BlastRadiusSchema.optional(),
+      /** For a budget hold: the call's estimate and the scope that refused it. */
+      estimatedCostUsd: Usd.optional(),
+      budget: BudgetSnapshotSchema.optional(),
     }),
   ),
   event('approval.token_issued', z.object({ approvalId: z.uuid(), expiresAt: z.iso.datetime() })),
@@ -128,13 +137,19 @@ export const EventSchema = z.discriminatedUnion('type', [
       toolCallId: z.uuid(),
       decision: ApprovalDecisionSchema,
       decidedBy: z.string(),
+      kind: ApprovalKindSchema.optional(),
     }),
   ),
 
   // --- budgets ---
   event(
     'budget.exceeded',
-    BudgetSnapshotSchema.extend({ attemptedUsd: Usd, toolCallId: z.uuid() }),
+    BudgetSnapshotSchema.extend({
+      attemptedUsd: Usd,
+      toolCallId: z.uuid(),
+      /** The budget hold the operator can resolve. Absent on rows older than budget holds. */
+      approvalId: z.uuid().optional(),
+    }),
   ),
 
   // --- system ---
@@ -155,6 +170,10 @@ export const EventSchema = z.discriminatedUnion('type', [
     }),
   ),
   event('agent.created', z.object({ agentId: z.uuid(), name: z.string() })),
+  event(
+    'agent.updated',
+    z.object({ agentId: z.uuid(), name: z.string(), changes: z.array(z.string()) }),
+  ),
   event('auth.login', z.object({ ok: z.boolean(), ip: z.string() })),
 ]);
 
