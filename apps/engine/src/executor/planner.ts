@@ -15,8 +15,16 @@ export interface PlannerContext {
   signal: AbortSignal;
 }
 
+/** What every decision carries: the tokens it consumed and, when the planner can price them, the spend. */
+interface DecisionUsage {
+  tokensUsed: number;
+  /** Model spend for this step in USD. Recorded on the run; not a `costly` tool reservation. */
+  costUsd?: number;
+  model?: string;
+}
+
 export type StepDecision =
-  | {
+  | ({
       kind: 'tool_call';
       tool: string;
       input: JsonValue;
@@ -24,10 +32,11 @@ export type StepDecision =
       idempotencyKey?: string;
       /** Overrides the tool's own estimate when the caller knows better. */
       estimatedCostUsd?: number;
-      tokensUsed: number;
-    }
-  | { kind: 'final'; output: JsonValue | null; tokensUsed: number }
-  | { kind: 'fail'; error: string; tokensUsed: number };
+      /** The assistant turn that made the call, stored with the row and replayed verbatim. */
+      modelTurn?: JsonValue;
+    } & DecisionUsage)
+  | ({ kind: 'final'; output: JsonValue | null } & DecisionUsage)
+  | ({ kind: 'fail'; error: string } & DecisionUsage);
 
 export interface Planner {
   next(ctx: PlannerContext): Promise<StepDecision>;

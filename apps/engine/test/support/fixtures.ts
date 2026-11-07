@@ -45,6 +45,8 @@ export function testEnv(
     APPROVAL_TOKEN_TTL_MS: '600000',
     ANTHROPIC_API_KEY: '',
     AGENT_MODEL: '',
+    AGENT_EFFORT: '',
+    AGENT_MODEL_PRICING: '',
     ...overrides,
   };
 }

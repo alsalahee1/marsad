@@ -17,6 +17,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
     "@marsad/shared": "workspace:*",
     "argon2": "0.45.1",
     "bullmq": "5.81.4",

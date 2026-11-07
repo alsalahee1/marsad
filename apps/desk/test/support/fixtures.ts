@@ -80,6 +80,7 @@ export function toolCall(
     idempotencyKey: 'k'.repeat(16),
     status: kind === 'budget' ? 'blocked' : 'awaiting_approval',
     input: kind === 'budget' ? { usd: 999 } : { target: 'prod' },
+    modelTurn: null,
     output: null,
     estimatedCostUsd: kind === 'budget' ? 999 : 0,
     actualCostUsd: null,

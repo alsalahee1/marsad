@@ -103,6 +103,18 @@ const trustProxy = z
     return v;
   });
 
+/** USD per million tokens, by model id (or id prefix). Overrides the planner's built-in table. */
+export const ModelPricingTableSchema = z.record(
+  z.string().min(1),
+  z.object({
+    inputPerMTok: z.number().nonnegative(),
+    outputPerMTok: z.number().nonnegative(),
+    cacheReadPerMTok: z.number().nonnegative().optional(),
+    cacheWritePerMTok: z.number().nonnegative().optional(),
+  }),
+);
+export type ModelPricingTable = z.infer<typeof ModelPricingTableSchema>;
+
 /** Every key in .env.example, in the same order. A test asserts the two never drift. */
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS),
@@ -146,6 +158,26 @@ export const EnvSchema = z.object({
 
   ANTHROPIC_API_KEY: optionalString.transform((v) => (v === undefined ? undefined : new Secret(v))),
   AGENT_MODEL: optionalString,
+  AGENT_EFFORT: optionalString.pipe(z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional()),
+  AGENT_MODEL_PRICING: optionalString.transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'must be JSON' });
+      return z.NEVER;
+    }
+    const result = ModelPricingTableSchema.safeParse(parsed);
+    if (!result.success) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'must map model ids to { inputPerMTok, outputPerMTok } in USD',
+      });
+      return z.NEVER;
+    }
+    return result.data;
+  }),
 });
 
 export type EnvKey = keyof z.infer<typeof EnvSchema>;
@@ -187,10 +219,13 @@ export interface Config {
   readonly approvals: {
     readonly tokenTtlMs: number;
   };
-  /** Reserved for the agent loop (next session). Absent until configured. */
+  /** The agent loop. The planner is wired only when the key is present. */
   readonly model: {
     readonly anthropicApiKey: Secret | undefined;
+    /** Used when an agent's model is the literal `default`. */
     readonly agentModel: string | undefined;
+    readonly effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined;
+    readonly pricing: ModelPricingTable | undefined;
   };
 }
 
@@ -249,6 +284,11 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       perDayCalls: e.BUDGET_PER_DAY_CALLS,
     },
     approvals: { tokenTtlMs: e.APPROVAL_TOKEN_TTL_MS },
-    model: { anthropicApiKey: e.ANTHROPIC_API_KEY, agentModel: e.AGENT_MODEL },
+    model: {
+      anthropicApiKey: e.ANTHROPIC_API_KEY,
+      agentModel: e.AGENT_MODEL,
+      effort: e.AGENT_EFFORT,
+      pricing: e.AGENT_MODEL_PRICING,
+    },
   };
 }

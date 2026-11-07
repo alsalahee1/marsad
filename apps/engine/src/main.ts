@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import Anthropic from '@anthropic-ai/sdk';
 import { systemClock } from './clock.js';
 import { loadConfig } from './config.js';
 import { assertAppGrants } from './db/grants.js';
@@ -8,6 +9,7 @@ import { createEventBus } from './events/bus.js';
 import { ApprovalService } from './executor/approvals.js';
 import { BudgetGuard } from './executor/budget.js';
 import { Executor } from './executor/executor.js';
+import { AnthropicPlanner } from './executor/anthropicPlanner.js';
 import { DevPlanner } from './executor/devPlanner.js';
 import { HaltController } from './executor/halt.js';
 import { UnconfiguredPlanner, type Planner } from './executor/planner.js';
@@ -64,8 +66,26 @@ const queue = new RunQueue(redis);
 const halt = new HaltController({ store, bus, queue, clock, log });
 await halt.syncOnBoot();
 
-const planner: Planner = config.isProduction ? new UnconfiguredPlanner() : new DevPlanner();
-if (!config.isProduction) {
+// The agent loop runs only with a key. Without one, development gets the scripted planner and
+// production refuses to run anything rather than pretend.
+let planner: Planner;
+if (config.model.anthropicApiKey) {
+  planner = new AnthropicPlanner({
+    client: new Anthropic({ apiKey: config.model.anthropicApiKey.reveal() }),
+    defaultModel: config.model.agentModel,
+    effort: config.model.effort,
+    pricing: config.model.pricing,
+    log,
+  });
+  log.info(
+    { defaultModel: config.model.agentModel ?? null, effort: config.model.effort ?? null },
+    'anthropic planner active',
+  );
+} else if (config.isProduction) {
+  planner = new UnconfiguredPlanner();
+  log.warn('no ANTHROPIC_API_KEY: runs will fail at their first step until one is configured');
+} else {
+  planner = new DevPlanner();
   log.warn(
     'development planner active: run tasks are read as demo plans (apps/engine/src/executor/devPlanner.ts)',
   );

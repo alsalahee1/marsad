@@ -18,7 +18,7 @@ import {
 } from './rows.js';
 
 const COLUMNS =
-  'id, run_id, step, tool, blast_radius, idempotency_key, status, input, output, estimated_cost_usd, actual_cost_usd, error, created_at, started_at, finished_at';
+  'id, run_id, step, tool, blast_radius, idempotency_key, status, input, model_turn, output, estimated_cost_usd, actual_cost_usd, error, created_at, started_at, finished_at';
 
 function toToolCall(row: Row): ToolCall {
   return {
@@ -30,6 +30,7 @@ function toToolCall(row: Row): ToolCall {
     idempotencyKey: str(row['idempotency_key']),
     status: str(row['status']) as ToolCallStatus,
     input: json(row['input']),
+    modelTurn: jsonOrNull(row['model_turn']),
     output: jsonOrNull(row['output']),
     estimatedCostUsd: num(row['estimated_cost_usd']),
     actualCostUsd: numOrNull(row['actual_cost_usd']),
@@ -54,8 +55,8 @@ export function mysqlToolCallStore(pool: Pool): ToolCallStore {
     async insert(input, now) {
       try {
         await pool.query(
-          `INSERT INTO tool_calls (id, run_id, step, tool, blast_radius, idempotency_key, status, input, estimated_cost_usd, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO tool_calls (id, run_id, step, tool, blast_radius, idempotency_key, status, input, model_turn, estimated_cost_usd, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             input.id,
             input.runId,
@@ -65,6 +66,9 @@ export function mysqlToolCallStore(pool: Pool): ToolCallStore {
             input.idempotencyKey,
             input.status,
             toJson(input.input),
+            input.modelTurn === undefined || input.modelTurn === null
+              ? null
+              : toJson(input.modelTurn),
             input.estimatedCostUsd,
             now,
             now,

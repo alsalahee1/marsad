@@ -214,6 +214,7 @@ export function createMemoryStore(): Store & { dump(): { events: Event[] } } {
           idempotencyKey: input.idempotencyKey,
           status: input.status,
           input: structuredClone(input.input),
+          modelTurn: input.modelTurn === undefined ? null : structuredClone(input.modelTurn),
           output: null,
           estimatedCostUsd: input.estimatedCostUsd,
           actualCostUsd: null,

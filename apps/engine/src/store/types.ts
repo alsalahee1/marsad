@@ -103,6 +103,8 @@ export interface NewToolCall {
   blastRadius: BlastRadius;
   idempotencyKey: string;
   input: JsonValue;
+  /** The assistant turn that requested the call, for faithful replay. Null for scripted planners. */
+  modelTurn?: JsonValue | null;
   estimatedCostUsd: number;
   status: ToolCallStatus;
 }

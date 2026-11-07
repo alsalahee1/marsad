@@ -73,6 +73,8 @@ export const ToolCallSchema = z.object({
   idempotencyKey: IdempotencyKeySchema,
   status: ToolCallStatusSchema,
   input: JsonValueSchema,
+  /** The model's own assistant turn (thinking + tool_use blocks), replayed verbatim on resume. */
+  modelTurn: JsonValueSchema.nullable(),
   output: JsonValueSchema.nullable(),
   estimatedCostUsd: Usd,
   actualCostUsd: Usd.nullable(),

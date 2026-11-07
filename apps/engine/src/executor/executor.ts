@@ -165,11 +165,24 @@ export class Executor {
         signal: ctx.signal,
       });
     } catch (err) {
+      if (ctx.signal.aborted) {
+        // The deadline fired mid-request: that is the wall-clock ceiling, not a planner fault.
+        const claimedAt = await store.runs.getClaimedAt(ctx.runId);
+        return this.haltRun(ctx.runId, 'ceiling.wall_clock', {
+          limit: this.deps.ceilings.maxWallClockMs,
+          value: store.runs.activeMs(run, claimedAt, clock()),
+        });
+      }
       return this.failRun(ctx.runId, `planner error: ${errorMessage(err)}`);
     }
 
     const step = run.stepCount + 1;
-    await store.runs.recordStep(ctx.runId, decision.tokensUsed, clock());
+    const stepAt = clock();
+    await store.runs.recordStep(ctx.runId, decision.tokensUsed, stepAt);
+    // Model spend is what the operator asked "how much has been spent" about; it lands on the
+    // run like a tool's cost does. It is not a `costly` reservation: the token ceiling bounds it.
+    if (decision.costUsd !== undefined && decision.costUsd > 0)
+      await store.runs.addCost(ctx.runId, decision.costUsd, stepAt);
     await bus.insertEvent({
       type: 'run.step',
       runId: ctx.runId,
@@ -178,6 +191,8 @@ export class Executor {
         decision: decision.kind,
         tokensUsed: decision.tokensUsed,
         ...(decision.kind === 'tool_call' ? { tool: decision.tool } : {}),
+        ...(decision.costUsd !== undefined ? { costUsd: decision.costUsd } : {}),
+        ...(decision.model !== undefined ? { model: decision.model } : {}),
       },
     });
 
@@ -224,13 +239,45 @@ export class Executor {
     }
     const parsed = tool.input.safeParse(decision.input);
     if (!parsed.success) {
+      // Persist the refused call as a failed row: the planner replays it as an error result, so
+      // a model that sent bad arguments sees why instead of repeating them until the ceiling.
+      const error = `invalid input: ${parsed.error.issues.map((i) => `${i.path.map(String).join('.') || '(root)'}: ${i.message}`).join('; ')}`;
+      const now = clock();
+      const rawInput = decision.input;
+      const key =
+        decision.idempotencyKey ?? deriveIdempotencyKey(ctx.runId, step, tool.name, rawInput);
+      let failed: ToolCall | null = null;
+      try {
+        failed = await store.toolCalls.insert(
+          {
+            id: ids(),
+            runId: ctx.runId,
+            step,
+            tool: tool.name,
+            blastRadius: tool.blastRadius,
+            idempotencyKey: key,
+            input: rawInput,
+            modelTurn: decision.modelTurn ?? null,
+            estimatedCostUsd: 0,
+            status: 'pending',
+          },
+          now,
+        );
+        await store.toolCalls.transition(failed.id, ['pending'], 'failed', now, {
+          error,
+          finishedAt: now,
+        });
+      } catch (err) {
+        if (!(err instanceof IdempotencyConflictError)) throw err;
+      }
       await bus.insertEvent({
         type: 'tool.failed',
         runId: ctx.runId,
         payload: {
+          ...(failed ? { toolCallId: failed.id } : {}),
           tool: tool.name,
           step,
-          error: `invalid input: ${parsed.error.issues.map((i) => i.message).join('; ')}`,
+          error,
         },
       });
       return null;
@@ -256,6 +303,7 @@ export class Executor {
           blastRadius: tool.blastRadius,
           idempotencyKey,
           input,
+          modelTurn: decision.modelTurn ?? null,
           estimatedCostUsd,
           status: 'pending',
         },

@@ -50,6 +50,9 @@ export const EventSchema = z.discriminatedUnion('type', [
       decision: z.enum(['tool_call', 'final', 'fail']),
       tokensUsed: Count,
       tool: ToolNameSchema.optional(),
+      /** Model spend for this step, when the planner can price it. */
+      costUsd: Usd.optional(),
+      model: z.string().optional(),
     }),
   ),
   event(

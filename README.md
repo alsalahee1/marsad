@@ -72,7 +72,8 @@ is what makes that extra privilege necessary for `CREATE TRIGGER`; never grant `
 4. Register tools. A tool without a valid `blastRadius` (or a `costly` tool without
    `estimateCostUsd`) throws and boot fails. The registry is snapshotted into `tools`.
 5. Redis, the run queue, the halt controller (`syncOnBoot` makes Redis agree with the MySQL
-   flag), the executor, the worker.
+   flag), the planner (`AnthropicPlanner` when `ANTHROPIC_API_KEY` is set, otherwise
+   `UnconfiguredPlanner` in production and `DevPlanner` elsewhere), the executor, the worker.
 6. HTTP: helmet, exact-origin CORS with credentials, 256 kB JSON limit, session middleware.
 
 ### Executor (`apps/engine/src/executor/executor.ts`)
@@ -91,6 +92,52 @@ anything runs. Then by blast radius:
   decides. No config, flag, or env var is consulted on that path.
 
 A retrying worker that finds an existing row for the same key never re-executes it.
+
+### Agent loop (`apps/engine/src/executor/anthropicPlanner.ts`)
+
+The loop is written by hand on the Messages API; there is no agent framework and no tool runner.
+It boots when `ANTHROPIC_API_KEY` is set. Without the key, production boots `UnconfiguredPlanner`
+(every run fails at step 1 with a clear reason) and development boots the demo planner below.
+
+Each step is one non-streaming request and one decision; the executor owns the loop and every
+limit. The request is: a fixed preamble plus the agent's `systemPrompt` as the system blocks
+(cache breakpoint on the last one, so the stable prefix is read from cache on every later step),
+the registry's tool definitions (`inputSchema` as written, minus the `$schema` marker),
+`tool_choice: auto` with parallel tool use disabled, and the run's conversation. Models that take
+adaptive thinking (Claude 4.6 and later, matched by id prefix) get `thinking: { type: "adaptive" }`
+and, when `AGENT_EFFORT` is set, `output_config.effort`; older ids get neither.
+
+**The conversation is the log.** Nothing is kept in memory between steps. Every request is rebuilt
+from the run's `tool_calls` rows: the assistant turn the model wrote (thinking and `tool_use`
+blocks, stored verbatim in `tool_calls.model_turn`, migration `0004`) followed by a `tool_result`
+built from the row's outcome: the output for `executed`, the error for `failed`, and an
+`is_error` result saying the operator rejected the call for `rejected`. A run resumed after an
+approval, a restart or a redeploy therefore sends exactly what the log says happened, and replayed
+thinking stays valid (preserved thinking requires the producing turn unchanged).
+
+The response maps to one of three decisions:
+
+| Response                        | Decision                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------- |
+| a `tool_use` block              | `tool_call` with `idempotencyKey = tool_use.id`, so a retrying worker finds the same row |
+| text only (`end_turn`)          | `final`; `run.output` is `{ text }`, plus `truncated: true` if `max_tokens` cut it       |
+| `stop_reason: refusal`          | `fail` with the refusal category; the run ends `failed`, no fallback model               |
+| `model_context_window_exceeded` | `fail`; raise the task's scope or the ceilings, not the prompt                           |
+| `tool_use` cut by `max_tokens`  | `fail`; a truncated tool input is never executed                                         |
+
+There is deliberately no retry on refusals, no fallback model and no prompt-side nudging: the
+operator sees `run.failed` with the reason and decides. Transport errors (rate limits, 5xx) are
+retried by the SDK's own two retries and then fail the step like any other exception.
+
+**Model and spend.** `agents.model` is sent as-is; the literal `default` resolves to `AGENT_MODEL`.
+Every response's token usage is counted against `RUN_MAX_TOKENS`, and its price is recorded on
+the run (`run.step` carries `costUsd` and `model`; `runs.cost_usd` accumulates it) using a built-in
+USD-per-million-tokens table for current Claude ids, extended or overridden by
+`AGENT_MODEL_PRICING`. Model spend is recorded, not reserved: the `costly` caps govern tool spend,
+and the token ceiling bounds model spend per run. An unknown model id logs one warning and
+records tokens without a price. The built-in table is a snapshot of list prices; verify it
+against the pricing page when you adopt a new id, and note that the Haiku 5.5 long-prompt tier
+above 100K input tokens is not modelled.
 
 ### Approvals
 
@@ -254,10 +301,10 @@ real planner is configured.
 
 ## Extension points
 
-- **Agent loop**: implement `Planner` (`apps/engine/src/executor/planner.ts`) and pass it to
-  the `Executor` in `main.ts` in place of `DevPlanner` / `UnconfiguredPlanner`. The planner only
-  decides; the executor enforces. `ANTHROPIC_API_KEY` / `AGENT_MODEL` are parsed and available
-  on `config.model`.
+- **Agent loop**: `Planner` (`apps/engine/src/executor/planner.ts`) is the seam. The shipped
+  `AnthropicPlanner` makes one decision per step from the log; another provider or a different
+  prompting strategy is a second implementation chosen in `main.ts`. The planner only decides;
+  the executor enforces, so a new planner inherits every limit, approval and budget unchanged.
 - **Tools**: `defineTool({...})` in `apps/engine/src/tools/builtin/` and register it in
   `registerBuiltinTools`. Declare `blastRadius`; costly tools declare `estimateCostUsd`.
 - **Desk**: consume `@marsad/shared` (`EventSchema` narrows every SSE frame; request schemas

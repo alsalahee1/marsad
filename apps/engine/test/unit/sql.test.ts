@@ -29,7 +29,7 @@ describe('sql statement splitter', () => {
 
   it('the shipped migrations parse into statements and every base table is in the grant map', async () => {
     const files = await readMigrations();
-    expect(files.map((f) => f.version)).toEqual([1, 2, 3]);
+    expect(files.map((f) => f.version)).toEqual([1, 2, 3, 4]);
     const created = new Set<string>();
     for (const f of files) {
       for (const s of splitSqlStatements(f.sql)) {
