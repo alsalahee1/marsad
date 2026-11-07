@@ -215,7 +215,9 @@ describe.runIf(enabled)('mysql integration', () => {
         );
       }
       expect((await store.events.listBefore(null, 2)).map((e) => e.id)).toEqual([ids[1], ids[2]]);
+      // The beforeEach row is older than a, b and c, so it leads the page before c.
       expect((await store.events.listBefore(ids[2] ?? null, 5)).map((e) => e.id)).toEqual([
+        eventId,
         ids[0],
         ids[1],
       ]);
